@@ -1,5 +1,9 @@
 import numpy as np
 
-def rate(games, rating_col='rating'):
-    games[rating_col] = np.ones(games.shape[0])
-    return games
+class OneBitAggregator(object):
+
+    def __init__(self):
+        pass
+
+    def rate_for_games(self, teams, games):
+        return {'one_bit': np.ones(games.shape[0])}

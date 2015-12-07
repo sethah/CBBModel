@@ -1,78 +1,29 @@
 import pandas as pd
 import numpy as np
 from DB import DB
-import time
+import requests
+from bs4 import BeautifulSoup
+from datetime import date
 
-def home_win_factor(neutral=False):
-    return 1. if neutral else 0.6
-def away_win_factor(neutral=False):
-    return 1. if neutral else 1.4
-
-def safe_divide(num, den):
-    return np.nan_to_num(num / den)
-
-def rate(teams, games, n_games=1000000):
-    team_index = {int(team) if not np.isnan(team) else -1: idx for (team, idx) in \
-                  zip(teams.team_id.values, range(teams.shape[0]))}
-    # home_win_factor = 0.6
-    # away_win_factor = 1.4
-
-    wplayed = np.zeros(shape=(teams.shape[0], teams.shape[0]))
-    played = np.zeros(shape=(teams.shape[0], teams.shape[0]))
-    wwins = np.zeros(shape=(teams.shape[0], teams.shape[0]))
-    wins = np.zeros(shape=(teams.shape[0], teams.shape[0]))
-    home_rpi = np.zeros(games.shape[0])
-    away_rpi = np.zeros(games.shape[0])
-    gp = np.zeros(teams.shape[0])
-    home_gp = np.zeros(games.shape[0])
-    away_gp = np.zeros(games.shape[0])
-    # print games.shape, len(team_index)
-    for k, (idx, game) in enumerate(games.iterrows()):
-        # TODO: handle nan teams
-        if np.isnan(game.hteam_id) or np.isnan(game.ateam_id):
-            # print k
-            continue
-        i, j = (team_index[game.hteam_id], team_index[game.ateam_id])
-        wp = win_percentage(wwins, wplayed)
-        unweighted_owp = top_level_owp(wins, played)
-        owp = arbitrary_owp(unweighted_owp, played)
-        oowp = arbitrary_owp(owp, played)
-        # print wp[j], owp[j], oowp[j]
-        rpi = get_rpi(played, wplayed, wins, wwins)
-        home_rpi[k] = rpi[i]
-        away_rpi[k] = rpi[j]
-        print rpi[i], rpi[j]
-        gp[i] += 1
-        gp[j] += 1
-        home_gp[k] = gp[i]
-        away_gp[k] = gp[j]
-        # print game['dt'], rpi[i], rpi[j], home_rpi[k], away_rpi[k]
-        # teams['rpi'] = rpi
-
-        if game.home_outcome:
-            wwins[i, j] += home_win_factor(game.neutral)
-            wins[i, j] += 1.
-        else:
-            wwins[j, i] += away_win_factor(game.neutral)
-            wins[j, i] += 1.
-        wplayed[i, j] += home_win_factor(game.neutral)
-        wplayed[j, i] += away_win_factor(game.neutral)
-        played[i, j] += 1.
-        played[j, i] += 1.
-
-    games['home_rpi'] = home_rpi
-    games['away_rpi'] = away_rpi
-    games['home_gp'] = home_gp
-    games['away_gp'] = away_gp
-
-    return played, wplayed, wins, wwins, games
+import util
 
 class RPIAggregator(object):
 
-    def __init__(self, teams):
+    def __init__(self, teams, ignore_nan_teams=True):
+        self.ignore_nan_teams = ignore_nan_teams
+        self._initialize(teams)
+
+    def _initialize(self, teams):
+        """
+        Allocate arrays for data storage during aggregation.
+
+        :param teams: A dataframe of team ids
+        :return: None
+        """
         self.played = np.zeros(shape=(teams.shape[0], teams.shape[0]))
         self.wins = np.zeros(shape=(teams.shape[0], teams.shape[0]))
         self.team_index = {int(team) if not np.isnan(team) else -1: idx for idx, team in enumerate(teams.team_id.values)}
+        self.inverted_team_index = {v: k for k, v in self.team_index.items()}
         self.weighted_total_won = np.zeros(teams.shape[0])
         self.weighted_total_played = np.zeros(teams.shape[0])
         self.total_played = np.zeros(teams.shape[0])
@@ -80,87 +31,56 @@ class RPIAggregator(object):
         self.wp = np.zeros(teams.shape[0])
         self.owp = np.zeros(teams.shape[0])
         self.oowp = np.zeros(teams.shape[0])
+        self.nteams = len(teams)
+        self.col_map = None
 
-    def update_wp(self, home_idx, away_idx):
-        hwp = safe_divide(self.weighted_total_won[home_idx], self.weighted_total_played[home_idx])
-        awp = safe_divide(self.weighted_total_won[away_idx], self.weighted_total_played[away_idx])
-        self.wp[home_idx] = hwp
-        self.wp[away_idx] = awp
+    def update(self, game_row):
+        """
+        Update the aggregator with a single game.
 
-    def get_update_indices(self, home_idx, away_idx):
-        home_opponent_indices = np.nonzero(self.played[home_idx, :])[0]
-        away_opponent_indices = np.nonzero(self.played[away_idx, :])[0]
-        return np.hstack((home_opponent_indices,
-                          away_opponent_indices,
-                          [home_idx, away_idx]))
+        :param game_row: 1D Numpy Array of the form [hteam_id, ateam_id, home_outcome, neutral].
+        :return: None.
+        """
+        hteam_id = game_row[0]
+        ateam_id = game_row[1]
+        home_outcome = game_row[2]
+        neutral = game_row[3]
 
-    def update_owp(self, home_idx, away_idx):
-        update_indices = self.get_update_indices(home_idx, away_idx)
+        # update winning percentages for teams that don't exist in database
+        # TODO: Structure the aggregations to ignore teams not in division 1
+        # TODO: so we don't have to worry about nans creeping into aggregation buffers
+        if np.isnan(game_row[hteam_id]) or np.isnan(ateam_id):
+            if not self.ignore_nan_teams:
+                self.update_wp(self.team_index[hteam_id], self.team_index[ateam_id])
+            return None
+        i, j = self.team_index[hteam_id], self.team_index[ateam_id]
 
-        for idx in update_indices:
-            opp_wins = self.get_opp_wins(idx)
-            opp_played = self.get_opp_played(idx)
-            weights = self.get_weights(idx)
-            self.owp[idx] = np.nansum(safe_divide(opp_wins, opp_played) * weights)
+        self._update_wins(i, j, home_outcome, neutral)
+        self._update_played(i, j, neutral)
 
-    def update_oowp(self, home_idx, away_idx):
-        home_oowp = np.nansum(self.owp * self.get_weights(home_idx))
-        away_oowp = np.nansum(self.owp * self.get_weights(away_idx))
-        self.oowp[home_idx] = home_oowp
-        self.oowp[away_idx] = away_oowp
-
-    def update_opponent_stats(self):
+    def merge(self, other):
         pass
 
-    def get_weights(self, idx):
-        return safe_divide(self.played[idx, :], self.total_played[idx])
+    def evaluate(self):
+        """
 
-    def get_opp_wins(self, idx):
-        return self.total_won - self.wins[:, idx]
+        :return:
+        """
+        wp = self._calculate_wp()
+        owp = self._calculate_owp()
+        oowp = self._calculate_oowp(owp)
 
-    def get_opp_played(self, idx):
-        return self.total_played - self.played[:, idx]
+        return RPIAggregator._calculate_rpi(wp, owp, oowp)
 
-    def get_rpi(self, idx):
-        return RPIAggregator.calculate_rpi(self.wp[idx], self.owp[idx], self.oowp[idx])
+    def _update_played(self, home_idx, away_idx, is_neutral=False):
+        """
+        Update the total games played aggregation buffers for a single game.
 
-    def rate_for_games(self, teams, games):
-        home_rpi = np.zeros(games.shape[0])
-        away_rpi = np.zeros(games.shape[0])
-        cols = {name: idx for idx, name in enumerate(games.columns)}
-        for k, row in enumerate(games.values):
-            if k > 100:
-                break
-            # TODO: handle nan teams
-            if np.isnan(row[cols['hteam_id']]) or np.isnan(row[cols['ateam_id']]):
-                continue
-            i, j = self.team_index[row[cols['hteam_id']]], self.team_index[row[cols['ateam_id']]]
-
-            t0 = time.time()
-            self.update_wp(i, j)
-            t1 = time.time()
-            self.update_owp(i, j)
-            t2 = time.time()
-            self.update_oowp(i, j)
-            t3 = time.time()
-
-
-            home_rpi[k] = self.get_rpi(i)
-            away_rpi[k] = self.get_rpi(j)
-
-
-            # print awp, away_owp, away_oowp
-            # print home_rpi, away_rpi
-
-            self.update_wins(i, j, row[cols['home_outcome']], row[cols['neutral']])
-            self.update_played(i, j, row[cols['neutral']])
-
-
-            print t1 - t0, t2 - t1, t3 - t2
-
-        return home_rpi, away_rpi
-
-    def update_played(self, home_idx, away_idx, is_neutral=False):
+        :param home_idx: INT index of the home team in the aggregation buffer.
+        :param away_idx: INT index of the away team in the aggregation buffer.
+        :param is_neutral: BOOLEAN indicator of neutral site game.
+        :return: None.
+        """
         self.weighted_total_played[home_idx] += RPIAggregator.win_factor(True, is_neutral)
         self.weighted_total_played[away_idx] += RPIAggregator.win_factor(False, is_neutral)
         self.total_played[home_idx] += 1
@@ -168,7 +88,16 @@ class RPIAggregator(object):
         self.played[home_idx, away_idx] += 1.
         self.played[away_idx, home_idx] += 1.
 
-    def update_wins(self, home_idx, away_idx, home_outcome, neutral=False):
+    def _update_wins(self, home_idx, away_idx, home_outcome, neutral=False):
+        """
+        Update the total games won aggregation buffers for a single game.
+
+        :param home_idx: INT index of the home team in the aggregation buffer.
+        :param away_idx: INT index of the away team in the aggregation buffer.
+        :param home_outcome: BOOLEAN indicator of the home team outcome win or loss.
+        :param is_neutral: BOOLEAN indicator of neutral site game.
+        :return: None.
+        """
         win_factor = RPIAggregator.win_factor(home_outcome, neutral)
         if home_outcome:
             self.weighted_total_won[home_idx] += win_factor
@@ -179,10 +108,56 @@ class RPIAggregator(object):
             self.total_won[away_idx] += 1
             self.wins[away_idx, home_idx] += 1.
 
+    def _calculate_wp(self):
+        """
+        Compute the weighted winning percentage for each team.
 
-    @staticmethod
-    def calculate_rpi(wp, owp, oowp):
-        return 0.25 * wp + 0.5 * owp + 0.25 * oowp
+        The weighted winning percentage weights home wins less than away wins, and home losses
+        more than away losses. Neutral sites are unweighted (weight = 1).
+
+        Reference:
+            https://en.wikipedia.org/wiki/Rating_Percentage_Index#Basketball_formula
+
+        :return: 1xnteams Numpy Array of weighted winning percentages.
+        """
+        return util.safe_divide(self.weighted_total_won, self.weighted_total_played)
+
+    def _calculate_owp(self):
+        """
+        Compute the opponent's winning percentage for each team.
+
+        The opponent winning percentage for a team is the weighted average of a team's
+        opponents unweighted winning percentage. Games that the opponents have played against
+        the given team are removed. This is computed as follows, for team A:
+            weights * ({team A's opponents wins} - {team A's opponents wins vs. team A}) /
+                ({team A's opponents games played} - {team A's opponents games played vs. team A})
+
+        Reference:
+            https://en.wikipedia.org/wiki/Rating_Percentage_Index#Basketball_formula
+
+        :return: 1xnteams Numpy Array of opponent's winning percentages.
+        """
+        opp_wins = np.dot(self.total_won[:, np.newaxis], np.ones(self.nteams)[np.newaxis, :]) - self.wins
+        opp_played = np.dot(self.total_played[:, np.newaxis], np.ones(self.nteams)[np.newaxis, :]) - self.played
+        weights = util.safe_divide(self.played, self.total_played[:, np.newaxis]).T
+        return np.nansum(util.safe_divide(opp_wins, opp_played) * weights, axis=0)
+
+    def _calculate_oowp(self, owp):
+        """
+        Compute the opponent's opponent's winning percentages for each team.
+
+        The OOWP is the weighted average of a team's OWP. The weights represent the number of times
+        the team played each opponent. Games that the opponents have played against
+        the given team are removed.
+
+        Reference:
+            https://en.wikipedia.org/wiki/Rating_Percentage_Index#Basketball_formula
+
+        :param owp: 1xnteams Numpy Array of opponent's winning percentage for each team.
+        :return:
+        """
+        weights = util.safe_divide(self.played, self.total_played[:, np.newaxis]).T
+        return np.nansum(np.dot(owp[:, np.newaxis], np.ones(self.nteams)[np.newaxis, :]) * weights, axis=0)
 
     @staticmethod
     def win_factor(is_home, is_neutral=False):
@@ -193,100 +168,29 @@ class RPIAggregator(object):
         else:
             return 1.4
 
-def update_owp(idx, total_won, total_played, wins, played):
-    opp_wins = total_won - wins[:, idx]
-    opp_played = total_played - played[:, idx]
-    weights = safe_divide(played[idx, :], total_played[idx])
-    update = np.nansum(safe_divide(opp_wins, opp_played) * weights)
-    return update
+    @staticmethod
+    def _calculate_rpi(wp, owp, oowp):
+        return 0.25 * wp + 0.5 * owp + 0.25 * oowp
 
-def win_percentage(wins, played):
-    weighted_total_won = np.sum(wins, axis=1)
-    weighted_total_played = np.sum(played, axis=1)
-    wp = weighted_total_won / weighted_total_played
-    wp[np.where(~np.isfinite(wp))] = 0.
-    return wp
-
-
-def _vec_to_mat(vec, nrepeat=1):
-    return np.dot(np.ones(nrepeat)[:, np.newaxis], vec[:, np.newaxis].T)
-
-
-def top_level_owp(wins, played):
-    total_played = _vec_to_mat(np.sum(played, axis=1))
-    total_won = _vec_to_mat(np.sum(wins, axis=1))
-    owp = (total_won - wins.T) / (total_played - played.T)
-    owp[np.where(~np.isfinite(owp))] = 0.
-    return owp
-
-
-def arbitrary_owp(wp, played):
-    """
-    :param wp: vector of win percentages of length n_teams
-    :param played: n_teams by n_teams matrix of games played
-    :return:
-    """
-    weights = played.T / np.sum(played.T, axis=0)[:, np.newaxis]
-    weights[np.where(~np.isfinite(weights))] = 0.
-    owp = np.nansum(wp * weights, axis=1)
-    return owp
-
-
-def calculate_rpi(wp, owp, oowp):
-    return 0.25 * wp + 0.5 * owp + 0.25 * oowp
-
-def get_rpi(played, wplayed, wins, wwins):
-    wp = win_percentage(wwins, wplayed)
-    unweighted_owp = top_level_owp(wins, played)
-    owp = arbitrary_owp(unweighted_owp, played)
-    oowp = arbitrary_owp(owp, played)
-    return calculate_rpi(wp, owp, oowp)
-
-
-def get_games(season=None):
-    games = pd.read_sql("SELECT * FROM games_test", DB.conn)
-    # TODO: build this directly into the postgres query
-    if season is not None:
-        games['season'] = games.dt.map(lambda d: get_season(d))
-        games = games[games.season == season]
-        games = games.sort('dt')
-        games.reset_index(inplace=True)
-    return games
-def get_season(dt):
-    return dt.year if dt.month <= 6 else dt.year + 1
-def get_teams(games):
-    hteams = games[['hteam_id']]
-    ateams = games[['ateam_id']]
-    hteams = hteams.rename(columns={'hteam_id': 'team_id'})
-    ateams = ateams.rename(columns={'ateam_id': 'team_id'})
-    teams = pd.concat([hteams, ateams], axis=0)
-    teams.drop_duplicates(inplace=True)
-    teams.dropna(inplace=True)
-    return teams
-
+def rpi_test_data():
+    team_ids = {'UConn': 0, 'Kansas': 1, 'Duke': 2, 'Minnesota': 3}
+    data = [['UConn', 64, 'Kansas', 57],
+            ['UConn', 82, 'Duke', 68],
+            ['Minnesota', 71, 'UConn', 72],
+            ['Kansas',	69,	'UConn', 62],
+            ['Duke', 81, 'Minnesota', 70],
+            ['Minnesota', 52, 'Kansas', 62]]
+    df = pd.DataFrame(data, columns=['hteam', 'hscore', 'ateam', 'ascore'])
+    df['home_outcome'] = df.hscore > df.ascore
+    df['neutral'] = False
+    df['hteam_id'] = df.hteam.map(lambda x: team_ids.get(x))
+    df['ateam_id'] = df.ateam.map(lambda x: team_ids.get(x))
+    return df
 
 if __name__ == "__main__":
-    games = get_games(2015)
-    teams = get_teams(games)
-    # data = [[3, 64, 1, 57, True, False], [3, 82, 0, 68, True, False], [2, 71, 3, 72, False, False],
-    #         [1, 69, 3, 62, True, False], [0, 81, 2, 70, True, False], [2, 52, 1, 62, False, False]]
-    # games = pd.DataFrame(data, columns=['hteam_id', 'home_score', 'ateam_id', 'away_score', 'home_outcome', 'neutral'])
-    # teams = np.unique(games.hteam_id.values.tolist() + games.ateam_id.values.tolist())
-    # teams = pd.DataFrame(teams[:, np.newaxis], columns=['team_id'])
-    # teams['idx'] = range(teams.shape[0])
-    # played, wplayed, wins, wwins, games = rate(teams, games)
-    # rpi = get_rpi(played, wplayed, wins, wwins)
-    # wp = win_percentage(wins, played)
-    # unweighted_owp = top_level_owp(wins, played)
-    # owp = arbitrary_owp(unweighted_owp, played)
-    # oowp = arbitrary_owp(owp, played)
-    # print wp[:10]
-    # print owp[:10]
-    # print rpi[:10]
-    # wp, owp, oowp = rate2(teams, games)
-    rpi = RPIAggregator(teams)
-    home_rpi, away_rpi = rpi.rate_for_games(teams, games)
-    games['home_rpi'] = home_rpi
-    games['away_rpi'] = away_rpi
-    # print wp[:10]
-    # print owp[:10]
+    df = rpi_test_data()
+    teams = util.get_teams(df)
+    data = df[['hteam_id', 'ateam_id', 'home_outcome', 'neutral']].values
+    agg = RPIAggregator(teams)
+    map(lambda x: agg.update(x), data)
+
