@@ -49,7 +49,7 @@ class RPIAggregator(object):
         # update winning percentages for teams that don't exist in database
         # TODO: Structure the aggregations to ignore teams not in division 1
         # TODO: so we don't have to worry about nans creeping into aggregation buffers
-        if np.isnan(game_row[hteam_id]) or np.isnan(ateam_id):
+        if np.isnan(hteam_id) or np.isnan(ateam_id):
             if not self.ignore_nan_teams:
                 self.update_wp(self.team_index[hteam_id], self.team_index[ateam_id])
             return None
@@ -70,7 +70,10 @@ class RPIAggregator(object):
         owp = self._calculate_owp()
         oowp = self._calculate_oowp(owp)
 
-        return RPIAggregator._calculate_rpi(wp, owp, oowp)
+        rpi = RPIAggregator._calculate_rpi(wp, owp, oowp)
+        sos = RPIAggregator._calculate_sos(owp, oowp)
+        return rpi, sos
+        # return pd.DataFrame(np.vstack((rpi, sos)).T, columns=['rpi', 'sos'])
 
     def _update_played(self, home_idx, away_idx, is_neutral=False):
         """
@@ -172,6 +175,10 @@ class RPIAggregator(object):
     def _calculate_rpi(wp, owp, oowp):
         return 0.25 * wp + 0.5 * owp + 0.25 * oowp
 
+    @staticmethod
+    def _calculate_sos(owp, oowp):
+        return 2. / 3. * owp + 1. / 3. * oowp
+
 def rpi_test_data():
     team_ids = {'UConn': 0, 'Kansas': 1, 'Duke': 2, 'Minnesota': 3}
     data = [['UConn', 64, 'Kansas', 57],
@@ -188,9 +195,20 @@ def rpi_test_data():
     return df
 
 if __name__ == "__main__":
-    df = rpi_test_data()
-    teams = util.get_teams(df)
-    data = df[['hteam_id', 'ateam_id', 'home_outcome', 'neutral']].values
+    # df = rpi_test_data()
+    games = util.get_games(date(2015, 3, 15))
+    d1 = pd.read_sql("SELECT * FROM division_one WHERE year=2015", DB.conn)
+    games = games.merge(d1, left_on='hteam_id', right_on='ncaaid')
+    games = games.merge(d1, left_on='ateam_id', right_on='ncaaid')
+    teams = util.get_teams(games)
+    data = games[['hteam_id', 'ateam_id', 'home_outcome', 'neutral']].values
     agg = RPIAggregator(teams)
     map(lambda x: agg.update(x), data)
+    ratings = agg.evaluate()
+    teams['rpi'] = ratings[0]
+    teams['sos'] = ratings[1]
+    teams['w'] = agg.total_won
+    teams['l'] = agg.total_played - agg.total_won
+    all_teams = pd.read_sql("SELECT ncaa, ncaaid FROM teams", DB.conn)
+    df = teams.merge(all_teams, left_on="team_id", right_on="ncaaid")
 

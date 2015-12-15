@@ -1,6 +1,6 @@
 import pandas as pd
 import numpy as np
-from datetime import datetime, date
+import datetime
 
 from DB import DB
 
@@ -23,10 +23,10 @@ def get_season_bounds(input):
     elif type(input) == str:
         dt = datetime.strptime(input, '%m/%d/%Y')
         years = _get_season_years(get_season(dt))
-    elif type(input) == date:
+    elif type(input) == datetime.date:
         years = _get_season_years(get_season(input))
 
-    return (date(years[0], 10, 30), date(years[1], 4, 30))
+    return (datetime.date(years[0], 10, 30), datetime.date(years[1], 4, 30))
 
 
 def get_games(input=None):
@@ -39,14 +39,14 @@ def get_games(input=None):
         # try to convert to date
         dt = datetime.strptime(input, '%m/%d/%Y').date()
         bounds = map(lambda d: d.strftime('%Y-%m-%d'), list(get_season_bounds(dt)))
-        bounds = [bounds[0], dt]
-    elif type(input) == datetime.date:
-        bounds = map(lambda d: d.strftime('%Y-%m-%d'), list(get_season_bounds(input)))
         bounds = [bounds[0], input]
-    elif type(input) == int and (input > 1900 and input <= get_season(datetime.now())):
+    elif isinstance(input, datetime.date):
+        bounds = map(lambda d: d.strftime('%Y-%m-%d'), list(get_season_bounds(input)))
+        bounds = [bounds[0], input.strftime('%Y-%m-%d')]
+    elif type(input) == int and (input > 1900 and input <= get_season(datetime.datetime.now())):
         bounds = map(lambda d: d.strftime('%Y-%m-%d'), list(get_season_bounds(input)))
     else:
-        bounds = [date(1900, 10, 30), date(3000, 4, 30)]
+        bounds = [datetime.date(1900, 10, 30), datetime.date(3000, 4, 30)]
     games = pd.read_sql("SELECT * FROM games_test WHERE dt > '%s' AND dt <= '%s'" % tuple(bounds), DB.conn)
     return games
 
