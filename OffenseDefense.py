@@ -50,28 +50,21 @@ class OffenseDefense(object):
         observed_home_points = stacked.home_score.values
         observed_away_points = stacked.away_score.values
 
-        off_starting_points, def_starting_points = self.get_starting_points(stacked)
+        o_initial, d_initial = self.get_starting_points(stacked)
 
         home_team_idx = stacked.i_home.values
         away_team_idx = stacked.i_away.values
         home_prior_mean = 0.
         home_prior_std = 10.
         home = pymc.Normal('home', home_prior_mean, 1 / home_prior_std**2, value=0)
-        tau_off = pymc.Uniform('tau_off', 0.0, 1.0, )
-        tau_def = pymc.Uniform('tau_def', 0.0, 1.0, )
-        intercept = pymc.Normal('intercept', 0, .0001, value=0)
+        # tau = 1 / stddev^2
+        tau_off = pymc.Uniform('tau_off', 0.0, 1.0, )  # equivalent to stddev between 1 and inf
+        tau_def = pymc.Uniform('tau_def', 0.0, 1.0, )  # equivalent to stddev between 1 and inf
+        intercept = pymc.Normal('intercept', 0, 1 / (100.)**2, value=0)
 
         # prior for offensive skills is a gaussian for each team
-        o_star = pymc.Normal("off_star",
-                                mu=5,
-                                tau=tau_off,
-                                size=num_teams,
-                                value=off_starting_points)
-        d_star = pymc.Normal("defs_star",
-                                mu=5,
-                                tau=tau_def,
-                                size=num_teams,
-                                value=def_starting_points)
+        o_star = pymc.Normal("o_star", mu=0, tau=tau_off, size=num_teams, value=o_initial)
+        d_star = pymc.Normal("d_star", mu=0, tau=tau_def, size=num_teams, value=d_initial)
 
         # trick to code the sum to zero contraint
         @pymc.deterministic
@@ -118,11 +111,11 @@ class OffenseDefense(object):
                           o_star, d_star, o_rtg, d_rtg,
                           home_points, away_points])
         mcmc = pymc.MCMC(model)
-        mcmc.sample(1000, 300)
-        return o_rtg.stats()['mean'], d_rtg.stats()['mean']
+        mcmc.sample(10000, 3000)
+        return o_rtg.stats(), d_rtg.stats(), home, home_theta, intercept
 
 if __name__ == "__main__":
-    games = util.get_games(2015)
+    games = util.get_box_games(2015)
     bteams = pd.read_sql("SELECT * FROM teams WHERE conf='B10'", DB.conn)
     b10_teams = set(bteams.ncaaid.values)
     b10 = games[(games.hteam_id.isin(b10_teams)) & (games.ateam_id.isin(b10_teams))]
@@ -130,6 +123,7 @@ if __name__ == "__main__":
     agg = OffenseDefense()
     teams = agg.get_teams(b10)
     teams = teams.merge(bteams[['ncaaid', 'ncaa']], left_on='team_id', right_on='ncaaid')
-    o, d = agg.algo(teams, b10)
-    teams['ortg'] = o
-    teams['drtg'] = d
+    o, d, home, theta, i = agg.algo(teams, b10)
+    teams['ortg'] = o['mean']
+    teams['drtg'] = d['mean']
+    os, ds = agg.get_starting_points(agg.stack_games(b10, teams))
