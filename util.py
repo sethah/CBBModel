@@ -60,28 +60,27 @@ def get_teams(games):
     :param games: DATAFRAME - games data
     :return: DATAFRAME - unique set of teams
     """
+    all_teams = pd.read_sql("SELECT ncaa, ncaaid FROM teams", DB.conn)
     hteams = games[['hteam_id']]
     ateams = games[['ateam_id']]
     hteams = hteams.rename(columns={'hteam_id': 'team_id'})
     ateams = ateams.rename(columns={'ateam_id': 'team_id'})
     teams = pd.concat([hteams, ateams], axis=0)
     teams.drop_duplicates(inplace=True)
+    teams = teams.reset_index()
+    teams['iteam'] = teams.index.values
+    teams.drop('index', 1, inplace=True)
     teams.dropna(inplace=True)
-    return teams
+    tmp = teams.merge(all_teams, left_on='team_id', right_on='ncaaid')
+    return tmp[['iteam', 'team_id', 'ncaa']]
 
-def get_box_games(input=None):
-    """
-    Get games from database and sort by date ascending
-    :param season: INT - season to filter games by
-    :return: DATAFRAME
-    """
+def get_data(input=None):
     bounds = get_date_bounds(input)
     q = """SELECT
                 g.*,
-                b.game_id,
                 b.team,
                 b.pts,
-                b.fga - b.oreb + b.turnover + 0.475 * b.fta AS poss
+                b.fga - COALESCE(b.oreb, 0) + COALESCE(b.turnover, 0) + 0.475 * COALESCE(b.fta, 0) AS poss
             FROM box_test b
             JOIN games_test g
             ON b.game_id = g.game_id
@@ -89,17 +88,41 @@ def get_box_games(input=None):
             AND g.dt > '%s'
             AND g.dt <= '%s'
         """ % tuple(bounds)
-    games = pd.read_sql(q, DB.conn)
-    return games
+    stacked = pd.read_sql(q, DB.conn).dropna(subset=['ateam_id', 'hteam_id'])
+    all_teams = pd.read_sql("SELECT ncaa, ncaaid FROM teams", DB.conn)
+    def clean_team(s):
+        return s.replace(";", "")
+    # remove semicolons from some teams
+    stacked['team'] = stacked.team.map(lambda s: clean_team(s))
+    stacked = stacked.merge(all_teams[['ncaaid', 'ncaa']], left_on="team", right_on="ncaa")
+    gb = stacked.groupby('game_id').count()
+    doubles = gb[gb.dt == 2].index.values
+    stacked = stacked[stacked.game_id.isin(doubles)]
+    teams = get_teams(stacked)
+
+    # bteams = pd.read_sql("SELECT * FROM teams WHERE conf='B10'", DB.conn)
+    # b10_teams = set(bteams.ncaaid.values)
+    # stacked = stacked.loc[(stacked.hteam_id.isin(b10_teams)) & (stacked.ateam_id.isin(b10_teams))]
+    # get all the teams in the games dataframe
+    keep_columns = ['game_id', 'dt', 'ncaa', 'ncaaid', 'hteam_id', 'ateam_id', 'pts', 'poss']
+    stacked = stacked[keep_columns]
+
+    stacked = stacked.merge(teams[['team_id', 'iteam']], left_on='ncaaid', right_on="team_id")
+
+    hgames = stacked[stacked.team_id == stacked.hteam_id]
+    agames = stacked[stacked.team_id != stacked.hteam_id]
+    games = hgames.merge(agames, on='game_id')
+    games = games[['game_id', 'dt_x', 'ncaa_x', 'team_id_x', 'ncaa_y', 'team_id_y', 'pts_x', 'poss_x',
+            'pts_y', 'poss_y', 'iteam_x', 'iteam_y']]
+    games.rename(columns={'dt_x': 'dt', 'ncaa_x': 'hteam', 'ncaa_y': 'ateam',
+                      'ncaaid_x': 'hteam_id', 'ncaaid_y': 'ateam_id', 'pts_x': 'hpts',
+                      'pts_y': 'apts', 'poss_x': 'hposs', 'poss_y': 'aposs',
+                         'iteam_y': 'i_ateam', 'iteam_x': 'i_hteam'}, inplace=True)
+    games['poss'] = games.apply(lambda row: 0.5*(row.hposs + row.aposs), axis=1)
+    return games, stacked, teams
 
 if __name__ == "__main__":
-    q1 = """SELECT
-                game_id,
-                team,
-                pts,
-                fga - oreb + turnover + 0.475 * fta AS poss
-            FROM box_test
-            WHERE first_name='Totals'
-        """
     # q = "CREATE VIEW games_detailed AS (%s)" % q1
-    games = get_box_games()#'4/10/2015')
+    # games = get_box_games()#'4/10/2015')
+    games, stacked, teams = get_data(2015)
+    # stacked = get_data(2015)

@@ -1,4 +1,3 @@
-import numpy as np
 import pandas as pd
 import numpy as np
 from DB import DB
@@ -42,6 +41,42 @@ class OffenseDefense(object):
         def_starting_points = -np.log(averages['away_score'].values)
         return off_starting_points, def_starting_points
 
+    def possession_model(self, date_like):
+        games, stacked, teams = util.get_data(date_like)
+        pace_initial = stacked.groupby('iteam').mean()['poss'].values
+        teams['pace_initial'] = pace_initial
+        num_teams = teams.shape[0]
+        home_team_idx = games.i_hteam.values
+        away_team_idx = games.i_ateam.values
+        observed_pace = games.poss.values
+        tau = pymc.Uniform('tau', (1. / 20**2), (1. / 3**2))  # equivalent to stddev between 1 and inf
+        pace_prior = pymc.Normal("pace_prior", mu=0, tau=tau, size=num_teams, value=pace_initial)
+        pace_intercept = pymc.Normal('intercept', 4, 1 / (1)**2, value=4)
+
+        @pymc.deterministic
+        def pace_rtg(pace=pace_prior):
+            p = pace.copy()
+            p = p - np.mean(pace)
+            return p
+
+        @pymc.deterministic
+        def mu_pace(home_team=home_team_idx,
+                       away_team=away_team_idx,
+                       paces=pace_rtg,
+                       pace_intercept=pace_intercept):
+            return pace_intercept + paces[home_team] + paces[away_team]
+
+        tau_poss = 1 / pymc.Uniform('sigma_poss', 1, 10)**2
+        poss = pymc.Normal('poss', mu=mu_pace, tau=tau_poss, value=observed_pace, observed=True)
+        poss_pred = pymc.Normal('poss_pred', mu=mu_pace, tau=tau_poss)
+
+        model = pymc.Model([mu_pace, pace_prior, tau, pace_rtg, poss, pace_intercept, tau_poss, poss_pred])
+        mcmc = pymc.MCMC(model)
+        N = 10000
+        burn_in = 3000
+        mcmc.sample(N, burn_in)
+
+
     def algo(self, teams, games):
         # find mu and sigma that maximize outcomes given scores
         stacked = self.stack_games(games, teams)
@@ -60,11 +95,14 @@ class OffenseDefense(object):
         # tau = 1 / stddev^2
         tau_off = pymc.Uniform('tau_off', 0.0, 1.0, )  # equivalent to stddev between 1 and inf
         tau_def = pymc.Uniform('tau_def', 0.0, 1.0, )  # equivalent to stddev between 1 and inf
-        intercept = pymc.Normal('intercept', 0, 1 / (100.)**2, value=0)
+        eff_intercept = pymc.Normal('intercept', 0, 1 / (1.)**2, value=0)
+        pace_intercept = pymc.Normal('intercept', 5, 1 / (3.)**2, value=0)
 
         # prior for offensive skills is a gaussian for each team
         o_star = pymc.Normal("o_star", mu=0, tau=tau_off, size=num_teams, value=o_initial)
         d_star = pymc.Normal("d_star", mu=0, tau=tau_def, size=num_teams, value=d_initial)
+        o_pace_star = pymc.Normal("o_pace_star", mu=0, tau=tau_off, size=num_teams, value=o_initial)
+        d_pace_star = pymc.Normal("d_pace_star", mu=0, tau=tau_def, size=num_teams, value=d_initial)
 
         # trick to code the sum to zero contraint
         @pymc.deterministic
@@ -80,13 +118,37 @@ class OffenseDefense(object):
             return defs
 
         @pymc.deterministic
-        def home_theta(home_team=home_team_idx,
+        def o_pace(offs_star=o_pace_star):
+            offs = offs_star.copy()
+            offs = offs - np.mean(offs_star)
+            return offs
+
+        @pymc.deterministic
+        def d_pace(defs_star=d_pace_star):
+            defs = defs_star.copy()
+            defs = defs - np.mean(defs_star)
+            return defs
+
+        @pymc.deterministic
+        def home_eff(home_team=home_team_idx,
                        away_team=away_team_idx,
                        home=home,
-                       offs=o_rtg,
-                       defs=d_rtg,
-                      intercept=intercept):
-            return np.exp(intercept + home + offs[home_team] + defs[away_team])
+                       off_effs=o_rtg,
+                       def_effs=d_rtg,
+                       eff_intercept=eff_intercept):
+            return eff_intercept + home + off_effs[home_team] + def_effs[away_team]
+
+        @pymc.deterministic
+        def home_pace(home_team=home_team_idx,
+                       away_team=away_team_idx,
+                       offs=o_pace,
+                       defs=d_pace,
+                       eff_intercept=eff_intercept):
+            return eff_intercept + offs[home_team] + defs[away_team]
+
+        @pymc.deterministic
+        def home_theta(eff=home_eff, pace=home_pace):
+            return np.exp(eff * pace)
 
         @pymc.deterministic
         def away_theta(home_team=home_team_idx,
