@@ -3,6 +3,7 @@ import numpy as np
 import datetime
 
 from DB import DB
+import org_ncaa
 
 ALL_SEASONS = [2010, 2011, 2012, 2013, 2014, 2015]
 
@@ -54,59 +55,58 @@ def get_games(input=None):
     games = pd.read_sql("SELECT * FROM games_test WHERE dt > '%s' AND dt <= '%s'" % tuple(bounds), DB.conn)
     return games
 
-def get_teams(games):
+def get_teams3(stacked, min_games=0):
     """
     Create a dataframe of all teams for a set of games.
     :param games: DATAFRAME - games data
     :return: DATAFRAME - unique set of teams
     """
-    all_teams = pd.read_sql("SELECT ncaa, ncaaid FROM teams", DB.conn)
-    hteams = games[['hteam_id']]
-    ateams = games[['ateam_id']]
-    hteams = hteams.rename(columns={'hteam_id': 'team_id'})
-    ateams = ateams.rename(columns={'ateam_id': 'team_id'})
-    teams = pd.concat([hteams, ateams], axis=0)
-    teams.drop_duplicates(inplace=True)
-    teams = teams.reset_index()
+    gb = stacked.groupby('ncaaid').count()
+    gb = gb[gb.dt > min_games]
+    gb.dropna(subset=['dt'], inplace=True)
+    teams = pd.DataFrame(gb.index.values, columns=['team_id'])
     teams['iteam'] = teams.index.values
-    teams.drop('index', 1, inplace=True)
-    teams.dropna(inplace=True)
-    tmp = teams.merge(all_teams, left_on='team_id', right_on='ncaaid')
-    return tmp[['iteam', 'team_id', 'ncaa']]
+    return teams
 
 def get_data(input=None):
-    bounds = get_date_bounds(input)
-    q = """SELECT
-                g.*,
-                b.team,
-                b.pts,
-                b.fga - COALESCE(b.oreb, 0) + COALESCE(b.turnover, 0) + 0.475 * COALESCE(b.fta, 0) AS poss
-            FROM box_test b
-            JOIN games_test g
-            ON b.game_id = g.game_id
-            AND b.first_name='Totals'
-            AND g.dt > '%s'
-            AND g.dt <= '%s'
-        """ % tuple(bounds)
-    stacked = pd.read_sql(q, DB.conn).dropna(subset=['ateam_id', 'hteam_id'])
+    def _get_stacked():
+        bounds = get_date_bounds(input)
+        q = """SELECT
+                    g.*,
+                    b.team,
+                    b.pts,
+                    b.fga - COALESCE(b.oreb, 0) + COALESCE(b.turnover, 0) + 0.475 * COALESCE(b.fta, 0) AS poss
+                FROM box_test b
+                JOIN games_test g
+                ON b.game_id = g.game_id
+                AND b.first_name='Totals'
+                AND g.dt > '%s'
+                AND g.dt <= '%s'
+            """ % tuple(bounds)
+        stacked = pd.read_sql(q, DB.conn).dropna(subset=['ateam_id', 'hteam_id'])
+
+        def clean_team(s):
+            return s.replace(";", "")
+        stacked['team'] = stacked.team.map(lambda s: clean_team(s))
+        return stacked
+    stacked = _get_stacked()
     all_teams = pd.read_sql("SELECT ncaa, ncaaid FROM teams", DB.conn)
-    def clean_team(s):
-        return s.replace(";", "")
-    # remove semicolons from some teams
-    stacked['team'] = stacked.team.map(lambda s: clean_team(s))
-    stacked = stacked.merge(all_teams[['ncaaid', 'ncaa']], left_on="team", right_on="ncaa")
-    gb = stacked.groupby('game_id').count()
-    doubles = gb[gb.dt == 2].index.values
-    stacked = stacked[stacked.game_id.isin(doubles)]
-    teams = get_teams(stacked)
 
-    # bteams = pd.read_sql("SELECT * FROM teams WHERE conf='B10'", DB.conn)
-    # b10_teams = set(bteams.ncaaid.values)
-    # stacked = stacked.loc[(stacked.hteam_id.isin(b10_teams)) & (stacked.ateam_id.isin(b10_teams))]
-    # get all the teams in the games dataframe
-    keep_columns = ['game_id', 'dt', 'ncaa', 'ncaaid', 'hteam_id', 'ateam_id', 'pts', 'poss']
-    stacked = stacked[keep_columns]
+    def _filter_teams(stacked):
+        # before we join on the team, we replace aliases
+        stacked['team'] = stacked.team.map(lambda t: org_ncaa.REVERSE_ALIAS.get(t, t))
+        stacked = stacked.merge(all_teams[['ncaaid', 'ncaa']], left_on="team", right_on="ncaa")
+        gb = stacked.groupby('game_id').count()
+        doubles = gb[gb.dt == 2].index.values
+        stacked = stacked[stacked.game_id.isin(doubles)]
+        # get all the teams in the games dataframe
+        # keep_columns = ['game_id', 'dt', 'ncaa', 'ncaaid', 'hteam_id', 'ateam_id', 'pts', 'poss']
+        # stacked = stacked[keep_columns]
+        return stacked
+    stacked = _filter_teams(stacked)
+    teams = get_teams3(stacked)
 
+    # join to get the team index as a column
     stacked = stacked.merge(teams[['team_id', 'iteam']], left_on='ncaaid', right_on="team_id")
 
     hgames = stacked[stacked.team_id == stacked.hteam_id]
@@ -122,7 +122,4 @@ def get_data(input=None):
     return games, stacked, teams
 
 if __name__ == "__main__":
-    # q = "CREATE VIEW games_detailed AS (%s)" % q1
-    # games = get_box_games()#'4/10/2015')
     games, stacked, teams = get_data(2015)
-    # stacked = get_data(2015)

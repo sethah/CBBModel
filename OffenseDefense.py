@@ -49,7 +49,7 @@ class OffenseDefense(object):
         home_team_idx = games.i_hteam.values
         away_team_idx = games.i_ateam.values
         observed_pace = games.poss.values
-        tau = pymc.Uniform('tau', (1. / 20**2), (1. / 3**2))  # equivalent to stddev between 1 and inf
+        tau = 1. / pymc.Uniform('sigma', 3, 20)**2
         pace_prior = pymc.Normal("pace_prior", mu=0, tau=tau, size=num_teams, value=pace_initial)
         pace_intercept = pymc.Normal('intercept', 4, 1 / (1)**2, value=4)
 
@@ -66,7 +66,7 @@ class OffenseDefense(object):
                        pace_intercept=pace_intercept):
             return pace_intercept + paces[home_team] + paces[away_team]
 
-        tau_poss = 1 / pymc.Uniform('sigma_poss', 1, 10)**2
+        tau_poss = 1. / pymc.Uniform('sigma_poss', 1, 10)**2
         poss = pymc.Normal('poss', mu=mu_pace, tau=tau_poss, value=observed_pace, observed=True)
         poss_pred = pymc.Normal('poss_pred', mu=mu_pace, tau=tau_poss)
 
@@ -75,6 +75,10 @@ class OffenseDefense(object):
         N = 10000
         burn_in = 3000
         mcmc.sample(N, burn_in)
+        teams['mean_pace_rtg'] = pace_rtg.stats()['mean']
+        teams['pace_rtg_rank'] = teams.mean_pace_rtg.rank(ascending=False)
+
+        return model
 
 
     def algo(self, teams, games):

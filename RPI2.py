@@ -3,7 +3,6 @@ import numpy as np
 from DB import DB
 import requests
 from bs4 import BeautifulSoup
-from datetime import date
 
 import util
 
