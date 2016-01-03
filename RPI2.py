@@ -31,9 +31,10 @@ def test_rpi():
 
 class RPIAggregator(object):
 
-    def __init__(self, ignore_nan_teams=True):
+    def __init__(self, ignore_nan_teams=True, team_col='team_id'):
         self.ignore_nan_teams = ignore_nan_teams
         self.initialized = False
+        self.team_col = team_col
 
     def _initialize(self, teams):
         """
@@ -44,7 +45,7 @@ class RPIAggregator(object):
         """
         self.played = np.zeros(shape=(teams.shape[0], teams.shape[0]))
         self.wins = np.zeros(shape=(teams.shape[0], teams.shape[0]))
-        self.team_index = {int(team) if not np.isnan(team) else -1: idx for idx, team in enumerate(teams.team_id.values)}
+        self.team_index = {int(team) if not np.isnan(team) else -1: idx for idx, team in enumerate(teams[self.team_col].values)}
         self.inverted_team_index = {v: k for k, v in self.team_index.items()}
         self.weighted_total_won = np.zeros(teams.shape[0])
         self.weighted_total_played = np.zeros(teams.shape[0])
@@ -199,12 +200,11 @@ class RPIAggregator(object):
 
         :return:
         """
-        wp = self._calculate_wp()
-        owp = self._calculate_owp()
-        oowp = self._calculate_oowp(owp)
-        print wp, owp, oowp
+        self.wp = self._calculate_wp()
+        self.owp = self._calculate_owp()
+        self.oowp = self._calculate_oowp(self.owp)
 
-        return RPIAggregator._calculate_rpi(wp, owp, oowp)
+        return RPIAggregator._calculate_rpi(self.wp, self.owp, self.oowp)
 
     def rate_at_date(self, dt):
         """
@@ -215,16 +215,16 @@ class RPIAggregator(object):
         games = util.get_games(dt)
         self.rate_for_games(games)
 
-    def rate_for_games(self, games):
+    def rate_for_games(self, stacked, unstacked):
         """
 
         :param games:
         :return:
         """
-        self.teams = util.get_teams(games)
+        self.teams = util.get_teams(unstacked)
         self._initialize(self.teams)
-        cols = {name: idx for idx, name in enumerate(games.columns)}
-        for k, row in enumerate(games.values):
+        cols = {name: idx for idx, name in enumerate(stacked.columns)}
+        for k, row in enumerate(stacked.values):
             hteam_id = row[cols['hteam_id']]
             ateam_id = row[cols['ateam_id']]
 
