@@ -1,6 +1,7 @@
 import pandas as pd
 import numpy as np
 import datetime
+from scipy import spatial
 
 from DB import DB
 import org_ncaa
@@ -161,12 +162,36 @@ def get_data(time_range=None):
     unstacked['poss'] = unstacked.apply(lambda row: 0.5*(row.hposs + row.aposs), axis=1)
     return unstacked, stacked, teams
 
-# def compare_ratings(this, that, compare_col, join_col='team_id'):
-#     if this.shape[0] > that.shape[0]:
-#         df = that.merge(this, on=join_col)
-#     else:
-#         df = this.merge(that, on=join_col)
-#     df['this_rank'] = df[compare_col].rank(ascending=False)
+def compare_ratings(this, that, compare_col, this_name='this', that_name='that', join_col='team_id', metric=None):
+    if this.shape[0] > that.shape[0]:
+        df = that.merge(this, on=join_col)
+    else:
+        df = this.merge(that, on=join_col)
+    df.rename(columns={compare_col + '_x': this_name + '_rating',
+                       compare_col + '_y': that_name + '_rating'}, inplace=True)
+    df[this_name + '_rank'] = df[this_name + '_rating'].rank(ascending=False)
+    df[that_name + '_rank'] = df[that_name + '_rating'].rank(ascending=False)
+    if metric is None:
+        _metric = 'cos'
+    else:
+        _metric = metric
+    rank_sim = _ranking_similarity(df[this_name + '_rank'].values, df[that_name + '_rank'].values, _metric)
+    rating_sim = None
+
+    return rank_sim, rating_sim, df
+
+
+def _ranking_similarity(rank1, rank2, metric='cos'):
+    print metric
+    assert rank1.shape[0] == rank2.shape[0], 'rank vectors must be of same length'
+    if metric == 'avg_diff':
+        sim = np.mean(np.abs(rank1 - rank2))
+    elif metric == 'cos':
+        sim = spatial.distance.cosine(rank1, rank2)
+    else:
+        sim = None
+
+    return sim
 
 if __name__ == "__main__":
     unstacked, stacked, teams = get_data(2015)
