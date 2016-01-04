@@ -10,6 +10,7 @@ def safe_divide(num, den):
     return np.nan_to_num(num / den)
 
 def rpi_test_data():
+    """Toy data to test the RPI functionality"""
     team_ids = {'UConn': 0, 'Kansas': 1, 'Duke': 2, 'Minnesota': 3}
     data = [['UConn', 64, 'Kansas', 57],
             ['UConn', 82, 'Duke', 68],
@@ -123,15 +124,32 @@ class RPIAggregator(object):
 
     def _calculate_wp(self):
         """
+        Compute the weighted winning percentage for each team.
 
-        :return:
+        The weighted winning percentage weights home wins less than away wins, and home losses
+        more than away losses. Neutral sites are unweighted (weight = 1).
+
+        Reference:
+            https://en.wikipedia.org/wiki/Rating_Percentage_Index#Basketball_formula
+
+        :return: 1xnteams Numpy Array of weighted winning percentages.
         """
         return safe_divide(self.weighted_total_won, self.weighted_total_played)
 
     def _calculate_owp(self):
         """
+        Compute the opponent's winning percentage for each team.
 
-        :return:
+        The opponent winning percentage for a team is the weighted average of a team's
+        opponents unweighted winning percentage. Games that the opponents have played against
+        the given team are removed. This is computed as follows, for team A:
+            weights * ({team A's opponents wins} - {team A's opponents wins vs. team A}) /
+                ({team A's opponents games played} - {team A's opponents games played vs. team A})
+
+        Reference:
+            https://en.wikipedia.org/wiki/Rating_Percentage_Index#Basketball_formula
+
+        :return: 1xnteams Numpy Array of opponent's winning percentages.
         """
         opp_wins = np.dot(self.total_won[:, np.newaxis], np.ones(self.nteams)[np.newaxis, :]) - self.wins
         opp_played = np.dot(self.total_played[:, np.newaxis], np.ones(self.nteams)[np.newaxis, :]) - self.played
@@ -140,9 +158,17 @@ class RPIAggregator(object):
 
     def _calculate_oowp(self, owp):
         """
+        Compute the opponent's opponent's winning percentages for each team.
 
-        :param owp:
-        :return:
+        The OOWP is the weighted average of a team's OWP. The weights represent the number of times
+        the team played each opponent. Games that the opponents have played against
+        the given team are removed.
+
+        Reference:
+            https://en.wikipedia.org/wiki/Rating_Percentage_Index#Basketball_formula
+
+        :param owp: 1xnteams Numpy Array of opponent's winning percentage for each team.
+        :return: 1xnteams Numpy Array of opponent's opponent's winning percentage for each team.
         """
         weights = safe_divide(self.played, self.total_played[:, np.newaxis]).T
         return np.nansum(np.dot(owp[:, np.newaxis], np.ones(self.nteams)[np.newaxis, :]) * weights, axis=0)
@@ -237,7 +263,6 @@ class RPIAggregator(object):
 
             self.update_wins(i, j, row[cols['home_outcome']], row[cols['neutral']])
             self.update_played(i, j, row[cols['neutral']])
-
 
     def rate_for_every_game(self, teams, games, store_intermediate=False):
         """
@@ -355,27 +380,6 @@ def get_true_rpi():
 
 
 if __name__ == "__main__":
-    # df = rpi_test_data()
-    # agg = RPIAggregator(True)
-    #
-    # agg.rate_at_date(date(2015, 03, 20))
-#     url = 'http://www.cbssports.com/collegebasketball/bracketology/nitty-gritty-report'
-#     response = requests.get(url)
-#     soup = BeautifulSoup(response.content, "html.parser")
-#     rpi_table = soup.find('table', {'class': 'data'})
-#     team_links = rpi_table.findAll('a')
-#     cbs_teams = []
-#     for link in team_links:
-#         url = link['href']
-#         if '/teams/' not in url:
-#             continue
-#         team = url.split('/')[-2]
-#         cbs_teams.append(team)
-#     cbsdf = pd.DataFrame(np.unique(cbs_teams), columns=['team'])
-#     df = pd.read_html(str(rpi_table), header=2)[0]
-#     df['cbs1'] = cbs_teams
-#     teams = pd.read_sql("SELECT * FROM teams", DB.conn)
-    # pass
     games = util.get_games(2015)
     teams = util.get_teams(games)
     agg = RPIAggregator()

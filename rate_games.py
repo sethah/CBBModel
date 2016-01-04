@@ -57,20 +57,7 @@ def rate_all(aggregator):
     return seasons
 
 if __name__ == "__main__":
-
     rating_data = rate_all(RPIAggregator())
-
-    # insert_ratings(rating_data, DB.conn)
-
-    # outcome = 'home_outcome'
-    # features = ['home_rpi', 'away_rpi', 'home_gp', 'away_gp']
-    # games['home_factor'] = np.ones(games.shape[0])
-    # X = games[features].values
-    # y = games[outcome].values
-    # X_train, X_holdout, y_train, y_holdout = train_test_split(X, y, test_size=0.2)
-    # clf, cv = train_and_score(X_train, y_train)
-    # games['predict'] = clf.predict(X)
-    # games['error'] = (games.home_outcome.astype(int) - games.predict).abs()
 
 
 

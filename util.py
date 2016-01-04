@@ -8,29 +8,40 @@ import org_ncaa
 
 ALL_SEASONS = [2010, 2011, 2012, 2013, 2014, 2015]
 
-def get_season(dt):
-    """Assign a season to a given date."""
-    return dt.year if dt.month <= 6 else dt.year + 1
-
 def safe_divide(num, den):
     return np.nan_to_num(num / den)
 
 def get_season_bounds(input):
-
-    def _get_season_years(season):
-        return (season - 1, season)
-
+    """
+    Get the date bounds indicating a season's start and end.
+    :param input: A year, date, or string indicating the current season.
+    :return: DATETIME.DATE, DATETIME.DATE
+    """
     if type(input) == int:
-        years = _get_season_years(input)
+        years = org_ncaa.get_season_years(input)
     elif type(input) == str:
         dt = datetime.strptime(input, '%m/%d/%Y')
-        years = _get_season_years(get_season(dt))
+        years = org_ncaa.get_season_years(org_ncaa.get_season(dt))
     elif type(input) == datetime.date:
-        years = _get_season_years(get_season(input))
+        years = org_ncaa.get_season_years(org_ncaa.get_season(input))
 
-    return (datetime.date(years[0], 10, 30), datetime.date(years[1], 4, 30))
+    return datetime.date(years[0], 10, 30), datetime.date(years[1], 4, 30)
 
 def get_date_bounds(input=None):
+    """
+    Get the two dates that bound a time range specified by the input.
+
+    Behavior:
+        - If a year is specified then the dates that bound the season for
+          that year will be returned.
+        - If a date is specified, then the start date of the season in which
+          that date occurs will be returned along with the specified date as
+          the end date
+        - If a string is specified, it will be converted to a date if possible,
+          and then treated as a date input.
+    :param input: A year, date, or string specifying the time range.
+    :return: DATETIME.DATE, DATETIME.DATE
+    """
     if type(input) == str:
         # try to convert to date
         dt = datetime.datetime.strptime(input, '%m/%d/%Y').date()
@@ -39,7 +50,7 @@ def get_date_bounds(input=None):
     elif isinstance(input, datetime.date):
         bounds = map(lambda d: d.strftime('%Y-%m-%d'), list(get_season_bounds(input)))
         bounds = [bounds[0], input.strftime('%Y-%m-%d')]
-    elif type(input) == int and (input > 1900 and input <= get_season(datetime.datetime.now())):
+    elif type(input) == int and (input > 1900 and input <= org_ncaa.get_season(datetime.datetime.now())):
         bounds = map(lambda d: d.strftime('%Y-%m-%d'), list(get_season_bounds(input)))
     else:
         bounds = [datetime.date(1900, 10, 30), datetime.date(3000, 4, 30)]
@@ -73,25 +84,12 @@ def get_teams(stacked, min_games=0, input_col='team', output_col='team', gb_col=
     teams['iteam'] = teams.index.values
     return teams
 
-def stack(unstacked, col, left_col, join_cols):
-    assert unstacked.shape[0] % 2 == 0, "unstacked data frame should have an even number of rows"
-    left = unstacked[unstacked[col] == unstacked[left_col]]
-    right = unstacked[unstacked[col] != unstacked[left_col]]
-    stacked = left.merge(right, on=join_cols)
-    return stacked
-
-def unstack(stacked, swap_left, swap_right, rename_left=None, rename_right=None):
-    stacked['home_team'] = stacked['hteam_id']
-    left = stacked
-    right = stacked.rename(columns={swap_left: swap_right, swap_right: swap_left})
-    unstacked = pd.concat([left, right])
-    if rename_left:
-        assert rename_right, "must provide renamed columns for each stacking column"
-        unstacked.rename(columns={swap_left: rename_left, swap_right: rename_right,
-                                  'hteam': 'team', 'ateam': 'opp'}, inplace=True)
-    return unstacked
-
 def query_stat(stat):
+    """
+    Get a query string for a given statistic.
+    :param stat: STRING - The statistic.
+    :return: STRING - SQL Query to compute the statistic.
+    """
     d = {'pts': 'b.pts',
          'poss': 'b.fga - COALESCE(b.oreb, 0) + COALESCE(b.turnover, 0) + 0.475 * COALESCE(b.fta, 0) AS poss'}
     return d.get(stat)
@@ -162,7 +160,19 @@ def get_data(time_range=None):
     unstacked['poss'] = unstacked.apply(lambda row: 0.5*(row.hposs + row.aposs), axis=1)
     return unstacked, stacked, teams
 
-def compare_ratings(this, that, compare_col, this_name='this', that_name='that', join_col='team_id', metric=None):
+def compare_ratings(this, that, compare_col, this_name='this',
+                    that_name='that', join_col='team_id', metric=None):
+    """
+    Compare one rating system versus another.
+    :param this: DATAFRAME - First dataframe containing rating column.
+    :param that: DATAFRAME - Second dataframe containing rating column.
+    :param compare_col: STRING - Common rating column in each dataframe to compare.
+    :param this_name: STRING - A string describing the first dataframe.
+    :param that_name: STRING - A string describing the second dataframe.
+    :param join_col: STRING - Column to join dataframes on.
+    :param metric: STRING - Similarity metric to use.
+    :return: DOUBLE, DOUBLE
+    """
     if this.shape[0] > that.shape[0]:
         df = that.merge(this, on=join_col)
     else:
@@ -178,11 +188,17 @@ def compare_ratings(this, that, compare_col, this_name='this', that_name='that',
     rank_sim = _ranking_similarity(df[this_name + '_rank'].values, df[that_name + '_rank'].values, _metric)
     rating_sim = None
 
-    return rank_sim, rating_sim, df
+    return rank_sim, rating_sim
 
 
 def _ranking_similarity(rank1, rank2, metric='cos'):
-    print metric
+    """
+    Measure the similarity between two ranking vectors.
+    :param rank1: 1D Numpy array - First ranking vector.
+    :param rank2: 1D Numpy array - Second ranking vector.
+    :param metric: STRING - Similarity metric to use.
+    :return: FLOAT - Similarity measure.
+    """
     assert rank1.shape[0] == rank2.shape[0], 'rank vectors must be of same length'
     if metric == 'avg_diff':
         sim = np.mean(np.abs(rank1 - rank2))

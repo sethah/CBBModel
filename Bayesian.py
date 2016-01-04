@@ -11,9 +11,23 @@ class Pace(object):
         pass
 
     def _get_data(self, time_range):
+        """
+        Get and store game and team data for the given time range.
+        :param time_range: A year, date, or string representing the time range of interest.
+        :return: None
+        """
         self.unstacked, self.stacked, self.teams = util.get_data(time_range)
 
     def rate(self, time_range, N_samples=10000, burn_rate=0.3):
+        """
+        Run a markov chain monte carlo simulation using the specified Bayesian network for this
+        object's game data.
+        :param time_range: A year, date, or string representing the time range of interest.
+        :param N_samples: The number of samples to run for the simulation.
+        :param burn_rate: A number between 0 and 1 indicating the ratio of samples to discard.
+        :return: (PyMC model, PyMC mcmc object)
+        """
+        assert (burn_rate > 0) and (burn_rate < 1), "burn rate must be between 0 and 1, but was %s" % burn_rate
         self._get_data(time_range)
 
         num_teams = self.teams.shape[0]
