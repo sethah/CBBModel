@@ -188,7 +188,7 @@ def compare_ratings(this, that, compare_col, this_name='this',
     rank_sim = _ranking_similarity(df[this_name + '_rank'].values, df[that_name + '_rank'].values, _metric)
     rating_sim = None
 
-    return rank_sim, rating_sim
+    return rank_sim, rating_sim, df
 
 
 def _ranking_similarity(rank1, rank2, metric='cos'):

@@ -18,6 +18,9 @@ class Pace(object):
         """
         self.unstacked, self.stacked, self.teams = util.get_data(time_range)
 
+    def _initial_guess(self):
+        return self.stacked.groupby('iteam').mean()['poss'].values
+
     def rate(self, time_range, N_samples=10000, burn_rate=0.3):
         """
         Run a markov chain monte carlo simulation using the specified Bayesian network for this
@@ -27,17 +30,18 @@ class Pace(object):
         :param burn_rate: A number between 0 and 1 indicating the ratio of samples to discard.
         :return: (PyMC model, PyMC mcmc object)
         """
-        assert (burn_rate > 0) and (burn_rate < 1), "burn rate must be between 0 and 1, but was %s" % burn_rate
+        assert (burn_rate >= 0) and (burn_rate <= 1), "burn rate must be between 0 and 1, but was %s" % burn_rate
         self._get_data(time_range)
 
         num_teams = self.teams.shape[0]
         home_team_idx = self.unstacked.i_hteam.values
         away_team_idx = self.unstacked.i_ateam.values
         observed_pace = self.unstacked.poss.values
-        pace_initial = self.stacked.groupby('iteam').mean()['poss'].values
-        tau = 1. / pymc.Uniform('sigma', 3, 20)**2
+        pace_initial = self._initial_guess()
+        # tau = 1. / pymc.Uniform('sigma', 3, 20)**2
+        tau = pymc.Uniform('tau', 1. / 40**2, 1. / 20**2)
         pace_prior = pymc.Normal("pace_prior", mu=0, tau=tau, size=num_teams, value=pace_initial)
-        pace_intercept = pymc.Normal('intercept', np.mean(pace_initial), 1 / 1**2, value=np.mean(pace_initial))
+        pace_intercept = pymc.Normal('intercept', 66, 1 / 1**2, value=66)
 
         @pymc.deterministic
         def pace_rtg(pace=pace_prior):
@@ -54,6 +58,8 @@ class Pace(object):
         poss = pymc.Normal('poss', mu=mu_pace, tau=tau_poss, value=observed_pace, observed=True)
         poss_pred = pymc.Normal('poss_pred', mu=mu_pace, tau=tau_poss)
         model = pymc.Model([mu_pace, pace_prior, tau, pace_rtg, poss, pace_intercept, tau_poss, poss_pred])
+        # map_ = pymc.MAP(model)
+        # map_.fit(method='fmin_powell')
         mcmc = pymc.MCMC(model)
         mcmc.sample(N_samples, N_samples * burn_rate)
 
