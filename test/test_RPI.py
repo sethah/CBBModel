@@ -19,7 +19,9 @@ def rpi_test_data():
     df['hteam_id'] = df.hteam.map(lambda x: team_ids.get(x))
     df['ateam_id'] = df.ateam.map(lambda x: team_ids.get(x))
     df['game_id'] = np.arange(df.shape[0])
-    return df
+
+    teams = pd.DataFrame([[team_ids[k], team_ids[k]] for k in team_ids], columns=['team_id', 'i_team'])
+    return df, teams
 
 def _unstack(stacked):
     left = stacked

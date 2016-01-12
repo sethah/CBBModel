@@ -3,7 +3,7 @@ import numpy as np
 import datetime
 from scipy import spatial
 
-from DB import DB
+from general.DB import DB
 import org_ncaa
 
 ALL_SEASONS = [2010, 2011, 2012, 2013, 2014, 2015]
@@ -151,8 +151,10 @@ def get_data(time_range=None):
     agames = stacked[stacked.team_id != stacked.hteam_id]
     agames = agames[['game_id', 'team', 'pts', 'poss', 'team_id', 'iteam']]
     unstacked = hgames.merge(agames, on='game_id')
+    print unstacked.columns
     unstacked = unstacked[['game_id', 'dt', 'team_x', 'team_id_x', 'team_y', 'team_id_y',
-                           'pts_x', 'poss_x', 'pts_y', 'poss_y', 'iteam_x', 'iteam_y']]
+                           'pts_x', 'poss_x', 'pts_y', 'poss_y', 'iteam_x', 'iteam_y',
+                           'neutral']]
     unstacked.rename(columns={'team_x': 'hteam', 'team_y': 'ateam', 'team_id_x': 'hteam_id',
                               'team_id_y': 'ateam_id', 'pts_x': 'hpts', 'pts_y': 'apts',
                               'poss_x': 'hposs', 'poss_y': 'aposs', 'iteam_y': 'i_ateam',

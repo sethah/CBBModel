@@ -1,6 +1,6 @@
 import pandas as pd
 import numpy as np
-from DB import DB
+from general.DB import DB
 import requests
 from bs4 import BeautifulSoup
 
@@ -23,7 +23,9 @@ def rpi_test_data():
     df['neutral'] = False
     df['hteam_id'] = df.hteam.map(lambda x: team_ids.get(x))
     df['ateam_id'] = df.ateam.map(lambda x: team_ids.get(x))
-    return df
+
+    teams = pd.DataFrame([[team_ids[k], team_ids[k]] for k in team_ids])
+    return df, teams
 
 def test_rpi():
     df = rpi_test_data()
