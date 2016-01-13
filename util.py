@@ -91,7 +91,8 @@ def query_stat(stat):
     :return: STRING - SQL Query to compute the statistic.
     """
     d = {'pts': 'b.pts',
-         'poss': 'b.fga - COALESCE(b.oreb, 0) + COALESCE(b.turnover, 0) + 0.475 * COALESCE(b.fta, 0) AS poss'}
+         'poss': 'b.fga - COALESCE(b.oreb, 0) + COALESCE(b.turnover, 0) + 0.475 * COALESCE(b.fta, 0) AS poss',
+         'ppp': 'b.pts / (b.fga - COALESCE(b.oreb, 0) + COALESCE(b.turnover, 0) + 0.475 * COALESCE(b.fta, 0)) as ppp'}
     return d.get(stat)
 
 def get_team_stats(time_range=None, stats=None):
@@ -140,7 +141,7 @@ def get_data(time_range=None):
     :param time_range: A year, date, or string representing the time interval of interest.
     :return: (DATAFRAME, DATAFRAME, DATAFRAME)
     """
-    stacked = get_team_stats(time_range, ['pts', 'poss'])
+    stacked = get_team_stats(time_range, ['pts', 'poss', 'ppp'])
     stacked = filter_teams(stacked)
     teams = get_teams(stacked, input_col='team_id', output_col='team_id')
 
@@ -149,16 +150,15 @@ def get_data(time_range=None):
 
     hgames = stacked[stacked.team_id == stacked.hteam_id]
     agames = stacked[stacked.team_id != stacked.hteam_id]
-    agames = agames[['game_id', 'team', 'pts', 'poss', 'team_id', 'iteam']]
+    agames = agames[['game_id', 'team', 'pts', 'poss', 'ppp', 'team_id', 'iteam']]
     unstacked = hgames.merge(agames, on='game_id')
-    print unstacked.columns
     unstacked = unstacked[['game_id', 'dt', 'team_x', 'team_id_x', 'team_y', 'team_id_y',
                            'pts_x', 'poss_x', 'pts_y', 'poss_y', 'iteam_x', 'iteam_y',
-                           'neutral']]
+                           'ppp_x', 'ppp_y', 'neutral']]
     unstacked.rename(columns={'team_x': 'hteam', 'team_y': 'ateam', 'team_id_x': 'hteam_id',
                               'team_id_y': 'ateam_id', 'pts_x': 'hpts', 'pts_y': 'apts',
                               'poss_x': 'hposs', 'poss_y': 'aposs', 'iteam_y': 'i_ateam',
-                              'iteam_x': 'i_hteam'}, inplace=True)
+                              'iteam_x': 'i_hteam', 'ppp_x': 'hppp', 'ppp_y': 'appp'}, inplace=True)
     unstacked['poss'] = unstacked.apply(lambda row: 0.5*(row.hposs + row.aposs), axis=1)
     return unstacked, stacked, teams
 
