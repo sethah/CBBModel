@@ -1,45 +1,87 @@
 import numpy as np
-from datetime import datetime, timedelta
 import pandas as pd
 from collections import defaultdict
 
-from general.DB import DB
 import util
+from test.test_RPI import *
+from general.DB import DB
 
 class AdjustedStat(object):
     home_factor = 1.014
     available_stats = {'ppp'}
 
     def __init__(self, stat, num_iterations=10, n_pre=5.):
+        """
+        Adjusted Stat class.
+
+        An adjusted stat uses an iterative rating method to adjust an offensive
+        and defensive version of a statistic for strength of schedule.
+
+        Parameters
+        ----------
+
+
+        Attributes
+        -------
+        stat : string
+            The statistic to adjust.
+        num_iterations : int (default=10.)
+            Maximum number of iterations for rating algorithm to converge.
+        n_pre : int (default=5.)
+            The number of games before the preseason effect dies out.
+        """
         self.n_pre = n_pre
         self.stat = stat
         self.num_iterations = num_iterations
 
-    def _get_data(self, time_range):
-        """Get a stacked and unstacked dataframe of game and stat information."""
-        self.unstacked, self.stacked, self.teams = util.get_data(time_range)
-
-    def _preseason_rank(self):
+    def _preseason_rank(self, teams):
         """Compute the preseason rank for each team's offensive and defensive stat."""
         avg_o = 1.
-        preseason_o = np.ones(self.teams.shape[0]) * avg_o
-        preseason_d = np.ones(self.teams.shape[0]) * avg_o
+        preseason_o = np.ones(teams.shape[0]) * avg_o
+        preseason_d = np.ones(teams.shape[0]) * avg_o
         return preseason_o, preseason_d
 
-    def _initial_guess(self):
+    def _initial_guess(self, stacked, teams):
         """The initial guess before iteration begins."""
-        avg_o = self.stacked[self.stat].mean()
-        guess_o = np.ones(self.teams.shape[0]) * avg_o
-        guess_d = np.ones(self.teams.shape[0]) * avg_o
+        avg_o = stacked[self.stat].mean()
+        guess_o = np.ones(teams.shape[0]) * avg_o
+        guess_d = np.ones(teams.shape[0]) * avg_o
         return guess_o, guess_d
+
+    def _average_stats(self, oraw, draw, current_index):
+        """The average offensive and defensive stats."""
+        s = 0
+        c = 0
+        for i, team_stats in enumerate(oraw):
+            team_index = current_index[i]
+            s += np.sum(team_stats[:team_index])
+            c += team_index
+        avg = float(s) / c
+        return avg, avg
 
     @staticmethod
     def _weights(n, n_pre=5.):
         """
-        Get the weight vector for `n` games played.
-        :param n: INT - number of games played.
-        :param n_pre: INT - number of games until preseason stops having an effect.
-        :return: 1D Numpy Array, FLOAT
+        Initialize data vectors before iteration begins.
+
+        Behavior:
+            -Uses uniform weights for the games.
+            -Uses a preseason weight that dies out linearly with the number
+             of games.
+
+        Parameters
+        ----------
+        n : int
+            The number of game weights to return.
+        n_pre : int (default=5.)
+            The number of games before the preseason should no longer have an effect.
+
+        Returns
+        -------
+        w : 1d numpy array
+            A vector of game weights.
+        w_pre : float
+            The preseason rating weight.
         """
         assert n > 0, 'n must be a positive integer'
         if n == 0:
@@ -83,7 +125,6 @@ class AdjustedStat(object):
             List whose elements are vectors of raw offensive outputs for each team.
         defense : list[1d numpy array]
             List whose elements are vectors of raw defensive outputs for each team.
-
         """
         odict = defaultdict(list)
         ddict = defaultdict(list)
@@ -114,60 +155,166 @@ class AdjustedStat(object):
         return idx, loc, offense, defense
 
     @staticmethod
-    def _update_residual(old, new):
+    def _calc_residual(old, new):
         """Compute the change in values between iterations"""
         return np.linalg.norm(old - new)
 
-    def rate(self, time_range):
+    @staticmethod
+    def _check_convergence(residual, tol):
+        """Check if a stat vector has converged."""
+        assert residual > 0, 'residual should be positive'
+        return residual < tol
+
+    @staticmethod
+    def _is_converged(residual_o, residual_d, tol=0.001):
+        """Check if the rate algorithm has converged."""
+        return AdjustedStat._check_convergence(residual_o, tol) and \
+            AdjustedStat._check_convergence(residual_d, tol)
+
+    def rate(self, stacked, unstacked, teams, game_skip=30, cache_intermediate=False):
         """
-        Run an adjusted stat model rating for the games within the
-        specified time range.
+        Run an adjusted stat model rating for the games data provided.
+
+        By default, provides incremental ratings throughout the season, running
+        the rating algorithm every `game_skip` games. For example, if `game_skip`
+        is 1, then the algorithm provides update ratings after each game played
+        during the season, and there will be `num_games` sets of ratings. The run
+        time gets progressively slower as the data included grows throughout the
+        season.
+
+        Stats are adjusted according to:
+            adj = \sum raw_stat / adj_opp_stat * avg_stat * w_i * \\
+                  loc_i + w_pre * stat_pre
+
+        References
+        ----------
+        TODO
+        http://kenpom.com
+
+        Parameters
+        ----------
+        TODO
+        cache_intermediate : boolean
+            Indicating whether to cache the intermediate stat vectors. Mostly
+            for debugging.
+
+        Returns
+        -------
+        adj_o : 1d numpy array
+            TODO
+        adj_d : 1d numpy array
+            TODO
+        residual : 1d numpy array
+            TODO
+        """
+        # TODO: this needs some refinement but working well for the most part
+        idx, loc, oraw, draw = self._initialize(unstacked, teams)
+        o_pre, d_pre = self._preseason_rank(teams)
+
+        num_teams = len(idx)
+
+        # if cache_intermediate:
+        #     results['o_history'] = []
+        #     results['d_history'] = []
+        results = []
+        adj_o_history = []
+        adj_d_history = []
+
+        game_indices = unstacked[['i_hteam', 'i_ateam']].values
+        current_index = {team: 0 for team in xrange(num_teams)}
+        for gidx, (hidx, aidx) in enumerate(game_indices):
+            current_index[hidx] += 1
+            current_index[aidx] += 1
+            if gidx % game_skip != 0:
+                continue
+            print 'No. of games included: %s' % gidx
+
+            iteration_results = {'o_residual': [], 'd_residual': [], 'iterations': 0}
+
+            avg_o, avg_d = self._average_stats(oraw, draw, current_index)
+            adj_o, adj_d = self._initial_guess(stacked, teams)
+
+            for i in xrange(self.num_iterations):
+                old_adj_o = adj_o.copy()
+                old_adj_d = adj_d.copy()
+                for j in xrange(num_teams):
+                    k = current_index[j]
+                    if k == 0:
+                        continue
+                    num_games = k
+                    w, w_pre = AdjustedStat._weights(num_games, self.n_pre)
+
+                    adj_o[j] = AdjustedStat._adjust(oraw[j][:k], adj_d[idx[j][:k]], avg_o, w, loc[j][:k], w_pre, o_pre[j])
+                    adj_d[j] = AdjustedStat._adjust(draw[j][:k], adj_o[idx[j][:k]],
+                                                    avg_d, w, loc[j][:k], w_pre, d_pre[j])
+
+                # if cache_intermediate:
+                #     results['o_history'].append(adj_o)
+                #     results['d_history'].append(adj_d)
+                iteration_results['o_residual'].append(AdjustedStat._calc_residual(old_adj_o, adj_o))
+                iteration_results['d_residual'].append(AdjustedStat._calc_residual(old_adj_d, adj_d))
+
+                if AdjustedStat._is_converged(iteration_results['o_residual'][-1],
+                                              iteration_results['d_residual'][-1]):
+                    break
+
+            iteration_results['iterations'] = i
+            adj_o_history.append(adj_o.copy())
+            adj_d_history.append(adj_d.copy())
+
+            results.append(iteration_results)
+
+        return adj_o_history, adj_d_history, results
+
+    @staticmethod
+    def _adjust(raw_stat, adj_opp_stat, avg_stat, weights, loc, weight_pre, stat_pre):
+        """
+        Adjust a statistic to compensate for opponent strength and home court
+        for a single team.
 
         Stats are adjusted according to:
             adj = \sum raw_stat / adj_opp_stat * avg_stat * w_i * loc_i + w_pre * stat_pre
 
         References
         ----------
-        http://kenpom.com
+        TODO
 
         Parameters
         ----------
-        time_range : date_like
-            A date or year representing the time range of interest.
+        raw_stat : 1d numpy array
+            Vector of raw stat outputs for the team.
+        adj_opp_stat : 1d numpy array
+            Vector of current values for the team's opponent's adjusted stats.
+        avg_stat : float
+            The league average for the statistic.
+        weights : 1d numpy array
+            Vector of weights for individual games.
+        loc : 1d numpy array
+            Vector of location multipliers.
+        weight_pre : float
+            Preseason rating weight.
+        stat_pre : float
+            The preseason stat rating for the team.
 
         Returns
         -------
-        adj_o : 1d numpy array
-            vector of adjusted offensive stats for each team.
-        adj_d : 1d numpy array
-            vector of adjusted defensive stats for each team.
-        residual : 1d numpy array
-            Vector of residuals at each iteration.
+        adjusted : float
+            The adjusted statistic.
         """
-        self._get_data(time_range)
-        idx, loc, oraw, draw = self._initialize(self.unstacked, self.teams)
-        o_pre, d_pre = self._preseason_rank()
+        wsum = np.sum(weights) + weight_pre
+        assert np.abs(wsum - 1.0) < 0.001, "weight sum must be 1.0, but was %s" % wsum
 
-        num_teams = len(idx)
-        adj_o, adj_d = self._initial_guess()
-        residual = {'offense': [], 'defense': []}
-        for i in xrange(self.num_iterations):
-            old_adj_o = adj_o.copy()
-            old_adj_d = adj_d.copy()
-            for j in xrange(num_teams):
-                num_games = idx[j].shape[0]
-                w, w_pre = AdjustedStat._weights(num_games, self.n_pre)
+        evidence = raw_stat / adj_opp_stat * loc * weights
+        prior = weight_pre * stat_pre
 
-                new_o = np.sum(oraw[j] / adj_d[idx[j]] * w * loc[j] + w_pre * o_pre[j])
-                new_d = np.sum(draw[j] / adj_o[idx[j]] * w * (1. / loc[j]) + w_pre * d_pre[j])
-
-                adj_o[j] = new_o
-                adj_d[j] = new_d
-            residual['offense'].append(AdjustedStat._update_residual(old_adj_o, adj_o))
-            residual['defense'].append(AdjustedStat._update_residual(old_adj_d, adj_d))
-
-        return adj_o, adj_d, residual
+        return avg_stat * np.sum(evidence) + prior
 
 if __name__ == "__main__":
-    adj = AdjustedStat('ppp')
-    o, d, r = adj.rate(2012)
+    unstacked, stacked, teams = util.get_data(2012)
+    all_teams = pd.read_sql("SELECT ncaa, ncaaid FROM teams", DB.conn)
+    teams = teams.merge(all_teams, how='left', left_on='team_id', right_on='ncaaid')
+    adj = AdjustedStat('ppp', n_pre=1)
+    o, d, r = adj.rate(stacked, unstacked, teams, cache_intermediate=True)
+    teams['o'] = o[-1]
+    teams['d'] = d[-1]
+    teams['diff'] = teams.o - teams.d
