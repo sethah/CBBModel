@@ -25,8 +25,8 @@ def rpi_test_data():
     df['i_ateam'] = df.ateam.map(lambda x: team_ids.get(x))
     df['game_id'] = np.arange(df.shape[0])
 
-    teams = pd.DataFrame([[v, v, k] for k, v in team_ids.iteritems()], columns=['team_id', 'i_team', 'team'])
-    return df, _stack(df), teams.sort('i_team')
+    teams = pd.DataFrame([[v, v, k] for k, v in team_ids.iteritems()], columns=['team_id', 'iteam', 'ncaa'])
+    return df, _stack(df), teams.sort('iteam')
 
 def _stack(unstacked):
     left = unstacked

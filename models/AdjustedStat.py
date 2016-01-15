@@ -9,6 +9,7 @@ from general.DB import DB
 class AdjustedStat(object):
     home_factor = 1.014
     available_stats = {'ppp'}
+    _default_guesses = {'ppp': 1.0, 'score': 60}
 
     def __init__(self, stat, num_iterations=10, n_pre=5.):
         """
@@ -36,14 +37,18 @@ class AdjustedStat(object):
 
     def _preseason_rank(self, teams):
         """Compute the preseason rank for each team's offensive and defensive stat."""
+        # TODO: Add a preseason rank based on previous end of year rating
         avg_o = 1.
         preseason_o = np.ones(teams.shape[0]) * avg_o
         preseason_d = np.ones(teams.shape[0]) * avg_o
         return preseason_o, preseason_d
 
-    def _initial_guess(self, stacked, teams):
+    def _initial_guess(self, stacked, teams, gidx):
         """The initial guess before iteration begins."""
-        avg_o = stacked[self.stat].mean()
+        if gidx == 0:
+            avg_o = AdjustedStat._default_guesses[self.stat]
+        else:
+            avg_o = np.mean(stacked[self.stat].values[:gidx])
         guess_o = np.ones(teams.shape[0]) * avg_o
         guess_d = np.ones(teams.shape[0]) * avg_o
         return guess_o, guess_d
@@ -171,7 +176,8 @@ class AdjustedStat(object):
         return AdjustedStat._check_convergence(residual_o, tol) and \
             AdjustedStat._check_convergence(residual_d, tol)
 
-    def rate(self, stacked, unstacked, teams, game_skip=30, cache_intermediate=False):
+    def rate(self, stacked, unstacked, teams, game_skip=30, cache_intermediate=False,
+             verbose=False):
         """
         Run an adjusted stat model rating for the games data provided.
 
@@ -193,19 +199,30 @@ class AdjustedStat(object):
 
         Parameters
         ----------
-        TODO
+        stacked : dataframe
+            Stacked dataframe containing game and stat information.
+        unstacked : dataframe
+            Unstacked dataframe containing game and stat information. Contains exactly
+            half the number of rows as `stacked`.
+        teams : dataframe
+            Dataframe mapping teams to indices in the data arrays.
+        game_skip : int
+            The game interval for new ratings. Ratings are computed every `game_skip`
+            games. (default=30)
         cache_intermediate : boolean
             Indicating whether to cache the intermediate stat vectors. Mostly
-            for debugging.
+            for debugging. (default=False)
+        verbose : boolean
+            Log iteration information. (default=False).
 
         Returns
         -------
-        adj_o : 1d numpy array
-            TODO
-        adj_d : 1d numpy array
-            TODO
-        residual : 1d numpy array
-            TODO
+        adj_o_history : list[1d numpy array]
+            List of adjusted offensive vectors for each run.
+        adj_d_history : list[1d numpy array]
+            List of adjusted defensive vectors for each run.
+        results : list[dictionary]
+            List of iteration results for each run of the algorithm.
         """
         # TODO: this needs some refinement but working well for the most part
         idx, loc, oraw, draw = self._initialize(unstacked, teams)
@@ -213,26 +230,33 @@ class AdjustedStat(object):
 
         num_teams = len(idx)
 
-        # if cache_intermediate:
-        #     results['o_history'] = []
-        #     results['d_history'] = []
         results = []
-        adj_o_history = []
-        adj_d_history = []
+
+        # Add the preseason rank as a starting point
+        zero_guess_o, zero_guess_d = self._preseason_rank(teams)
+        adj_o_history = [zero_guess_o]
+        adj_d_history = [zero_guess_d]
 
         game_indices = unstacked[['i_hteam', 'i_ateam']].values
         current_index = {team: 0 for team in xrange(num_teams)}
         for gidx, (hidx, aidx) in enumerate(game_indices):
+            # increment team vector indices to include new game
             current_index[hidx] += 1
             current_index[aidx] += 1
             if gidx % game_skip != 0:
                 continue
-            print 'No. of games included: %s' % gidx
+
+            if verbose == True:
+                print 'No. of games included: %s' % gidx
 
             iteration_results = {'o_residual': [], 'd_residual': [], 'iterations': 0}
 
             avg_o, avg_d = self._average_stats(oraw, draw, current_index)
-            adj_o, adj_d = self._initial_guess(stacked, teams)
+            adj_o, adj_d = self._initial_guess(stacked, teams, gidx)
+
+            if cache_intermediate:
+                iteration_results['o_history'] = []
+                iteration_results['d_history'] = []
 
             for i in xrange(self.num_iterations):
                 old_adj_o = adj_o.copy()
@@ -241,21 +265,21 @@ class AdjustedStat(object):
                     k = current_index[j]
                     if k == 0:
                         continue
-                    num_games = k
-                    w, w_pre = AdjustedStat._weights(num_games, self.n_pre)
 
-                    adj_o[j] = AdjustedStat._adjust(oraw[j][:k], adj_d[idx[j][:k]], avg_o, w, loc[j][:k], w_pre, o_pre[j])
+                    w, w_pre = AdjustedStat._weights(k, self.n_pre)
+                    adj_o[j] = AdjustedStat._adjust(oraw[j][:k], adj_d[idx[j][:k]],
+                                                    avg_o, w, loc[j][:k], w_pre, o_pre[j])
                     adj_d[j] = AdjustedStat._adjust(draw[j][:k], adj_o[idx[j][:k]],
                                                     avg_d, w, loc[j][:k], w_pre, d_pre[j])
+                if cache_intermediate:
+                    iteration_results['o_history'].append(adj_o)
+                    iteration_results['d_history'].append(adj_d)
+                oresidual = AdjustedStat._calc_residual(old_adj_o, adj_o)
+                dresidual = AdjustedStat._calc_residual(old_adj_d, adj_d)
+                iteration_results['o_residual'].append(oresidual)
+                iteration_results['d_residual'].append(dresidual)
 
-                # if cache_intermediate:
-                #     results['o_history'].append(adj_o)
-                #     results['d_history'].append(adj_d)
-                iteration_results['o_residual'].append(AdjustedStat._calc_residual(old_adj_o, adj_o))
-                iteration_results['d_residual'].append(AdjustedStat._calc_residual(old_adj_d, adj_d))
-
-                if AdjustedStat._is_converged(iteration_results['o_residual'][-1],
-                                              iteration_results['d_residual'][-1]):
+                if AdjustedStat._is_converged(oresidual, dresidual):
                     break
 
             iteration_results['iterations'] = i
