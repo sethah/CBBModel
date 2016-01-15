@@ -38,7 +38,7 @@ class AdjustedStat(object):
     def _preseason_rank(self, teams):
         """Compute the preseason rank for each team's offensive and defensive stat."""
         # TODO: Add a preseason rank based on previous end of year rating
-        avg_o = 1.
+        avg_o = 1.0
         preseason_o = np.ones(teams.shape[0]) * avg_o
         preseason_d = np.ones(teams.shape[0]) * avg_o
         return preseason_o, preseason_d
@@ -65,7 +65,7 @@ class AdjustedStat(object):
         return avg, avg
 
     @staticmethod
-    def _weights(n, n_pre=5.):
+    def _weights(n, n_pre=5):
         """
         Initialize data vectors before iteration begins.
 
@@ -78,7 +78,7 @@ class AdjustedStat(object):
         ----------
         n : int
             The number of game weights to return.
-        n_pre : int (default=5.)
+        n_pre : int (default=5)
             The number of games before the preseason should no longer have an effect.
 
         Returns
@@ -88,12 +88,11 @@ class AdjustedStat(object):
         w_pre : float
             The preseason rating weight.
         """
-        assert n > 0, 'n must be a positive integer'
         if n == 0:
-            return np.array([]), 1.
+            return np.array([0.0]), 1.
         n = int(n)
         w = np.ones(n)
-        w_pre = max(0, 1. - n / n_pre)
+        w_pre = max(0, 1. - n / (n_pre + 1.))
         w_norm = 1 - w_pre
         w /= (w.sum() / w_norm)
         return w, w_pre
@@ -104,9 +103,9 @@ class AdjustedStat(object):
         if is_neutral:
             loc_factor = 1.
         elif is_home:
-            loc_factor = AdjustedStat.home_factor
-        else:
             loc_factor = 1. / AdjustedStat.home_factor
+        else:
+            loc_factor = AdjustedStat.home_factor
         return loc_factor
 
     def _initialize(self, unstacked, teams):
@@ -167,7 +166,7 @@ class AdjustedStat(object):
     @staticmethod
     def _check_convergence(residual, tol):
         """Check if a stat vector has converged."""
-        assert residual > 0, 'residual should be positive'
+        assert residual >= 0.0, 'residual should be positive'
         return residual < tol
 
     @staticmethod
@@ -263,14 +262,12 @@ class AdjustedStat(object):
                 old_adj_d = adj_d.copy()
                 for j in xrange(num_teams):
                     k = current_index[j]
-                    if k == 0:
-                        continue
 
                     w, w_pre = AdjustedStat._weights(k, self.n_pre)
                     adj_o[j] = AdjustedStat._adjust(oraw[j][:k], adj_d[idx[j][:k]],
                                                     avg_o, w, loc[j][:k], w_pre, o_pre[j])
                     adj_d[j] = AdjustedStat._adjust(draw[j][:k], adj_o[idx[j][:k]],
-                                                    avg_d, w, loc[j][:k], w_pre, d_pre[j])
+                                                    avg_d, w, 1. / loc[j][:k], w_pre, d_pre[j])
                 if cache_intermediate:
                     iteration_results['o_history'].append(adj_o)
                     iteration_results['d_history'].append(adj_d)
@@ -280,7 +277,7 @@ class AdjustedStat(object):
                 iteration_results['d_residual'].append(dresidual)
 
                 if AdjustedStat._is_converged(oresidual, dresidual):
-                    break
+                    pass
 
             iteration_results['iterations'] = i
             adj_o_history.append(adj_o.copy())
@@ -330,7 +327,6 @@ class AdjustedStat(object):
 
         evidence = raw_stat / adj_opp_stat * loc * weights
         prior = weight_pre * stat_pre
-
         return avg_stat * np.sum(evidence) + prior
 
 if __name__ == "__main__":
