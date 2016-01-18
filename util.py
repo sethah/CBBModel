@@ -110,7 +110,7 @@ def get_team_stats(time_range=None, stats=None):
                 g.*,
                 b.team,
                 %s
-            FROM box_test b
+            FROM box_stats b
             JOIN games_test g
             ON b.game_id = g.game_id
             AND b.first_name='Totals'
@@ -142,6 +142,7 @@ def get_data(time_range=None):
     :return: (DATAFRAME, DATAFRAME, DATAFRAME)
     """
     stacked = get_team_stats(time_range, ['pts', 'poss', 'ppp'])
+    stacked = stacked[~pd.isnull(stacked.pts)]
     stacked = filter_teams(stacked)
     teams = get_teams(stacked, input_col='team_id', output_col='team_id')
 

@@ -65,7 +65,7 @@ class AdjustedStat(object):
         return avg, avg
 
     @staticmethod
-    def _weights(n, n_pre=5):
+    def _weights(n, n_pre=5, method='uniform'):
         """
         Initialize data vectors before iteration begins.
 
@@ -88,10 +88,19 @@ class AdjustedStat(object):
         w_pre : float
             The preseason rating weight.
         """
+        n = int(n)
         if n == 0:
             return np.array([0.0]), 1.
-        n = int(n)
-        w = np.ones(n)
+        elif method == 'linear':
+            w = np.arange(1, n + 1).astype(float)
+        elif method == 'uniform':
+            w = np.ones(n) / n
+        elif method == 'log':
+            w = np.log(np.arange(2, n + 2))
+        elif method == 'exponential':
+            w = np.exp(np.arange(1, n + 1) / 10.)
+        else:
+            raise ValueError, "unsupported weighting method: %s" % method
         w_pre = max(0, 1. - n / (n_pre + 1.))
         w_norm = 1 - w_pre
         w /= (w.sum() / w_norm)
@@ -166,7 +175,7 @@ class AdjustedStat(object):
     @staticmethod
     def _check_convergence(residual, tol):
         """Check if a stat vector has converged."""
-        assert residual >= 0.0, 'residual should be positive'
+        assert residual >= 0.0, 'residual should be positive but was %s' % residual
         return residual < tol
 
     @staticmethod
@@ -254,8 +263,8 @@ class AdjustedStat(object):
             adj_o, adj_d = self._initial_guess(stacked, teams, gidx)
 
             if cache_intermediate:
-                iteration_results['o_history'] = []
-                iteration_results['d_history'] = []
+                iteration_results['o_history'] = [adj_o.copy()]
+                iteration_results['d_history'] = [adj_d.copy()]
 
             for i in xrange(self.num_iterations):
                 old_adj_o = adj_o.copy()
@@ -263,21 +272,21 @@ class AdjustedStat(object):
                 for j in xrange(num_teams):
                     k = current_index[j]
 
-                    w, w_pre = AdjustedStat._weights(k, self.n_pre)
+                    w, w_pre = AdjustedStat._weights(k, self.n_pre, method='exponential')
                     adj_o[j] = AdjustedStat._adjust(oraw[j][:k], adj_d[idx[j][:k]],
                                                     avg_o, w, loc[j][:k], w_pre, o_pre[j])
                     adj_d[j] = AdjustedStat._adjust(draw[j][:k], adj_o[idx[j][:k]],
                                                     avg_d, w, 1. / loc[j][:k], w_pre, d_pre[j])
                 if cache_intermediate:
-                    iteration_results['o_history'].append(adj_o)
-                    iteration_results['d_history'].append(adj_d)
+                    iteration_results['o_history'].append(adj_o.copy())
+                    iteration_results['d_history'].append(adj_d.copy())
                 oresidual = AdjustedStat._calc_residual(old_adj_o, adj_o)
                 dresidual = AdjustedStat._calc_residual(old_adj_d, adj_d)
                 iteration_results['o_residual'].append(oresidual)
                 iteration_results['d_residual'].append(dresidual)
 
                 if AdjustedStat._is_converged(oresidual, dresidual):
-                    pass
+                    break
 
             iteration_results['iterations'] = i
             adj_o_history.append(adj_o.copy())

@@ -1,4 +1,4 @@
-from RPI2 import RPIAggregator
+from models.RPI2 import RPIAggregator
 import testing_utils
 
 import pandas as pd
