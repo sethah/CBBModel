@@ -170,7 +170,7 @@ class AdjustedStat(object):
     @staticmethod
     def _calc_residual(old, new):
         """Compute the change in values between iterations"""
-        return np.linalg.norm(old - new)
+        return np.linalg.norm(old - new) / np.linalg.norm(old)
 
     @staticmethod
     def _check_convergence(residual, tol):
@@ -179,10 +179,49 @@ class AdjustedStat(object):
         return residual < tol
 
     @staticmethod
-    def _is_converged(residual_o, residual_d, tol=0.001):
+    def _is_converged(residual_o, residual_d, tol=0.0005):
         """Check if the rate algorithm has converged."""
         return AdjustedStat._check_convergence(residual_o, tol) and \
             AdjustedStat._check_convergence(residual_d, tol)
+
+    @staticmethod
+    def _ratings_for_games(unstacked, time_vector, omatrix, dmatrix):
+        """
+        From the incremental adjusted ratings, compute vectors of home
+        offensive and defensive and away offensive and defensive ratings.
+
+        Parameters
+        ----------
+        unstacked : dataframe
+            Unstacked dataframe containing game and stat information.
+        time_vector : array_like
+            Vector of time indices.
+        omatrix : array_like
+        dmatrix : array_like
+
+        Returns
+        -------
+        h_off : 1d numpy array
+        h_def : 1d numpy array
+        a_off : 1d numpy array
+        a_def : 1d numpy array
+        """
+        h_off = np.zeros(unstacked.shape[0])
+        h_def = np.zeros(unstacked.shape[0])
+        a_off = np.zeros(unstacked.shape[0])
+        a_def = np.zeros(unstacked.shape[0])
+        for j, (idx1, idx2) in enumerate(zip(time_vector, np.roll(time_vector, -1))[:-1]):
+            hindices = unstacked.i_hteam.values[idx1:idx2]
+            aindices = unstacked.i_ateam.values[idx1:idx2]
+            h_off_ratings = omatrix[j][hindices]
+            h_def_ratings = dmatrix[j][hindices]
+            a_off_ratings = omatrix[j][aindices]
+            a_def_ratings = dmatrix[j][aindices]
+            h_off[idx1:idx2] = h_off_ratings
+            h_def[idx1:idx2] = h_def_ratings
+            a_off[idx1:idx2] = a_off_ratings
+            a_def[idx1:idx2] = a_def_ratings
+        return h_off, h_def, a_off, a_def
 
     def rate(self, stacked, unstacked, teams, game_skip=30, cache_intermediate=False,
              verbose=False):
@@ -202,8 +241,12 @@ class AdjustedStat(object):
 
         References
         ----------
-        TODO
-        http://kenpom.com
+        -Kenpom's own ratings explanation
+            http://kenpom.com/blog/index.php/weblog/entry/ratings_explanation
+        -Kenpom's explanation of margin of victory adjustment:
+            http://kenpom.com/blog/index.php/weblog/entry/pomeroy_ratings_version_2.0
+        -Kenpom's adjusted stats calculations explanation:
+            http://kenpom.com/blog/index.php/weblog/entry/national_efficiency/
 
         Parameters
         ----------
@@ -232,13 +275,21 @@ class AdjustedStat(object):
         results : list[dictionary]
             List of iteration results for each run of the algorithm.
         """
-        # TODO: this needs some refinement but working well for the most part
+        util.validate_games(stacked, unstacked, ['pts', 'poss', 'ppp'])
+        util.validate_teams(teams)
+
+        unstacked = unstacked.sort('dt')
+
         idx, loc, oraw, draw = self._initialize(unstacked, teams)
         o_pre, d_pre = self._preseason_rank(teams)
 
         num_teams = len(idx)
 
         results = []
+        home_adj_o = np.zeros(unstacked.shape[0])
+        home_adj_d = np.zeros(unstacked.shape[0])
+        away_adj_o = np.zeros(unstacked.shape[0])
+        away_adj_d = np.zeros(unstacked.shape[0])
 
         # Add the preseason rank as a starting point
         zero_guess_o, zero_guess_d = self._preseason_rank(teams)
@@ -247,12 +298,17 @@ class AdjustedStat(object):
 
         game_indices = unstacked[['i_hteam', 'i_ateam']].values
         current_index = {team: 0 for team in xrange(num_teams)}
+        time = [0]
+        prev_gidx = 0
         for gidx, (hidx, aidx) in enumerate(game_indices):
             # increment team vector indices to include new game
             current_index[hidx] += 1
             current_index[aidx] += 1
-            if gidx % game_skip != 0:
+            if gidx % game_skip != 0 and gidx != game_indices.shape[0] - 1:
                 continue
+
+            self._store_ratings(home_adj_o, away_adj_o, adj_o_history[-1], unstacked, prev_gidx, gidx + 1)
+            self._store_ratings(home_adj_d, away_adj_d, adj_d_history[-1], unstacked, prev_gidx, gidx + 1)
 
             if verbose == True:
                 print 'No. of games included: %s' % gidx
@@ -260,7 +316,11 @@ class AdjustedStat(object):
             iteration_results = {'o_residual': [], 'd_residual': [], 'iterations': 0}
 
             avg_o, avg_d = self._average_stats(oraw, draw, current_index)
-            adj_o, adj_d = self._initial_guess(stacked, teams, gidx)
+            if gidx == 0:
+                adj_o, adj_d = self._initial_guess(stacked, teams, gidx)
+            else:
+                adj_o = adj_o.copy()
+                adj_d = adj_d.copy()
 
             if cache_intermediate:
                 iteration_results['o_history'] = [adj_o.copy()]
@@ -286,15 +346,24 @@ class AdjustedStat(object):
                 iteration_results['d_residual'].append(dresidual)
 
                 if AdjustedStat._is_converged(oresidual, dresidual):
-                    break
+                    pass
 
-            iteration_results['iterations'] = i
+            iteration_results['iterations'] = i + 1
+            time.append(gidx + 1)
+            iteration_results['time'] = gidx + 1
             adj_o_history.append(adj_o.copy())
             adj_d_history.append(adj_d.copy())
 
             results.append(iteration_results)
+            prev_gidx = gidx
 
-        return adj_o_history, adj_d_history, results
+        hoff, hdef, aoff, adef = AdjustedStat._ratings_for_games(unstacked, time, adj_o_history, adj_d_history)
+        unstacked['home_adj_o'] = hoff
+        unstacked['home_adj_d'] = hdef
+        unstacked['away_adj_o'] = aoff
+        unstacked['away_adj_d'] = adef
+
+        return adj_o_history, adj_d_history, results, unstacked
 
     @staticmethod
     def _adjust(raw_stat, adj_opp_stat, avg_stat, weights, loc, weight_pre, stat_pre):
@@ -337,6 +406,12 @@ class AdjustedStat(object):
         evidence = raw_stat / adj_opp_stat * loc * weights
         prior = weight_pre * stat_pre
         return avg_stat * np.sum(evidence) + prior
+
+    def store_results(self):
+        # store offense
+        # store defense
+        # store teams
+        pass
 
 if __name__ == "__main__":
     unstacked, stacked, teams = util.get_data(2012)

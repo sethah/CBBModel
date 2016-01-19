@@ -81,7 +81,7 @@ def get_teams(stacked, min_games=0, input_col='team', output_col='team', gb_col=
     gb = stacked.groupby(input_col).count()
     gb = gb[gb[gb_col] > min_games]
     teams = pd.DataFrame(gb.index.values, columns=[output_col])
-    teams['iteam'] = teams.index.values
+    teams['i_team'] = teams.index.values
     return teams
 
 def query_stat(stat):
@@ -147,19 +147,19 @@ def get_data(time_range=None):
     teams = get_teams(stacked, input_col='team_id', output_col='team_id')
 
     # join to get the team index as a column
-    stacked = stacked.merge(teams[['team_id', 'iteam']], on="team_id")
+    stacked = stacked.merge(teams[['team_id', 'i_team']], on="team_id")
 
     hgames = stacked[stacked.team_id == stacked.hteam_id]
     agames = stacked[stacked.team_id != stacked.hteam_id]
-    agames = agames[['game_id', 'team', 'pts', 'poss', 'ppp', 'team_id', 'iteam']]
+    agames = agames[['game_id', 'team', 'pts', 'poss', 'ppp', 'team_id', 'i_team']]
     unstacked = hgames.merge(agames, on='game_id')
     unstacked = unstacked[['game_id', 'dt', 'team_x', 'team_id_x', 'team_y', 'team_id_y',
-                           'pts_x', 'poss_x', 'pts_y', 'poss_y', 'iteam_x', 'iteam_y',
-                           'ppp_x', 'ppp_y', 'neutral']]
+                           'pts_x', 'poss_x', 'pts_y', 'poss_y', 'i_team_x', 'i_team_y',
+                           'ppp_x', 'ppp_y', 'neutral', 'home_outcome']]
     unstacked.rename(columns={'team_x': 'hteam', 'team_y': 'ateam', 'team_id_x': 'hteam_id',
                               'team_id_y': 'ateam_id', 'pts_x': 'hpts', 'pts_y': 'apts',
-                              'poss_x': 'hposs', 'poss_y': 'aposs', 'iteam_y': 'i_ateam',
-                              'iteam_x': 'i_hteam', 'ppp_x': 'hppp', 'ppp_y': 'appp'}, inplace=True)
+                              'poss_x': 'hposs', 'poss_y': 'aposs', 'i_team_y': 'i_ateam',
+                              'i_team_x': 'i_hteam', 'ppp_x': 'hppp', 'ppp_y': 'appp'}, inplace=True)
     unstacked['poss'] = unstacked.apply(lambda row: 0.5*(row.hposs + row.aposs), axis=1)
     return unstacked, stacked, teams
 
@@ -211,6 +211,30 @@ def _ranking_similarity(rank1, rank2, metric='cos'):
         sim = None
 
     return sim
+
+def _assert_has_cols(df, columns, df_name="df"):
+    for col in columns:
+        assert col in df.columns, "%s dataframe is missing %s column" % (df_name, col)
+
+def validate_games(stacked, unstacked, stats_cols=['pts']):
+    def _validate_unstacked(df):
+        require_cols = ['dt', 'hteam_id', 'ateam_id', 'i_hteam', 'i_ateam', 'neutral']
+        for col in stats_cols:
+            require_cols += ['h' + col, 'a' + col]
+        _assert_has_cols(df, require_cols, "unstacked")
+
+    def _validate_stacked(df):
+        require_cols = ['dt', 'i_team'] + stats_cols
+        _assert_has_cols(df, require_cols, "stacked")
+
+    _validate_stacked(stacked)
+    _validate_unstacked(unstacked)
+    assert stacked.shape[0] == 2 * unstacked.shape[0], \
+        "stacked dataframe must have twice the number of rows as the unstacked"
+
+def validate_teams(teams):
+    require_cols = ['i_team', 'team_id']
+    _assert_has_cols(teams, require_cols, "unstacked")
 
 if __name__ == "__main__":
     unstacked, stacked, teams = get_data(2015)
