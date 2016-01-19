@@ -3,32 +3,28 @@ import pandas as pd
 from collections import defaultdict
 
 import util
-from test.test_RPI import *
 from general.DB import DB
+from models.RatingsModel import RatingsModel
 
-class AdjustedStat(object):
+class AdjustedStat(RatingsModel):
     home_factor = 1.014
     available_stats = {'ppp'}
     _default_guesses = {'ppp': 1.0, 'score': 60}
 
-    def __init__(self, stat, num_iterations=10, n_pre=5.):
+    def __init__(self, stat, num_iterations=10, n_pre=5):
         """
         Adjusted Stat class.
 
         An adjusted stat uses an iterative rating method to adjust an offensive
         and defensive version of a statistic for strength of schedule.
 
-        Parameters
-        ----------
-
-
         Attributes
         -------
         stat : string
             The statistic to adjust.
-        num_iterations : int (default=10.)
+        num_iterations : int (default=10)
             Maximum number of iterations for rating algorithm to converge.
-        n_pre : int (default=5.)
+        n_pre : int (default=5)
             The number of games before the preseason effect dies out.
         """
         self.n_pre = n_pre
@@ -185,7 +181,7 @@ class AdjustedStat(object):
             AdjustedStat._check_convergence(residual_d, tol)
 
     @staticmethod
-    def _ratings_for_games(unstacked, time_vector, omatrix, dmatrix):
+    def _rate_for_games(unstacked, time_vector, omatrix, dmatrix, stat_name=""):
         """
         From the incremental adjusted ratings, compute vectors of home
         offensive and defensive and away offensive and defensive ratings.
@@ -197,14 +193,14 @@ class AdjustedStat(object):
         time_vector : array_like
             Vector of time indices.
         omatrix : array_like
+            Array of offensive ratings vectors of length `len(time_vector)`.
         dmatrix : array_like
+            Array of defensive ratings vectors of length `len(time_vector)`.
 
         Returns
         -------
-        h_off : 1d numpy array
-        h_def : 1d numpy array
-        a_off : 1d numpy array
-        a_def : 1d numpy array
+        unstacked : dataframe
+            Unstacked dataframe with computed adjusted stats added to it.
         """
         h_off = np.zeros(unstacked.shape[0])
         h_def = np.zeros(unstacked.shape[0])
@@ -221,7 +217,12 @@ class AdjustedStat(object):
             h_def[idx1:idx2] = h_def_ratings
             a_off[idx1:idx2] = a_off_ratings
             a_def[idx1:idx2] = a_def_ratings
-        return h_off, h_def, a_off, a_def
+        col_prefixes = ['h_adj_', 'h_adj_d', 'a_adj_', 'a_adj_d']
+        col_names = map(lambda col: col + stat_name, col_prefixes)
+        data = zip(col_names, [h_off, h_def, a_off, a_def])
+        for name, col in data:
+            unstacked[name] = col
+        return unstacked
 
     def rate(self, stacked, unstacked, teams, game_skip=30, cache_intermediate=False,
              verbose=False):
@@ -285,12 +286,6 @@ class AdjustedStat(object):
 
         num_teams = len(idx)
 
-        results = []
-        home_adj_o = np.zeros(unstacked.shape[0])
-        home_adj_d = np.zeros(unstacked.shape[0])
-        away_adj_o = np.zeros(unstacked.shape[0])
-        away_adj_d = np.zeros(unstacked.shape[0])
-
         # Add the preseason rank as a starting point
         zero_guess_o, zero_guess_d = self._preseason_rank(teams)
         adj_o_history = [zero_guess_o]
@@ -299,7 +294,7 @@ class AdjustedStat(object):
         game_indices = unstacked[['i_hteam', 'i_ateam']].values
         current_index = {team: 0 for team in xrange(num_teams)}
         time = [0]
-        prev_gidx = 0
+        results = []
         for gidx, (hidx, aidx) in enumerate(game_indices):
             # increment team vector indices to include new game
             current_index[hidx] += 1
@@ -307,13 +302,8 @@ class AdjustedStat(object):
             if gidx % game_skip != 0 and gidx != game_indices.shape[0] - 1:
                 continue
 
-            self._store_ratings(home_adj_o, away_adj_o, adj_o_history[-1], unstacked, prev_gidx, gidx + 1)
-            self._store_ratings(home_adj_d, away_adj_d, adj_d_history[-1], unstacked, prev_gidx, gidx + 1)
-
-            if verbose == True:
+            if verbose:
                 print 'No. of games included: %s' % gidx
-
-            iteration_results = {'o_residual': [], 'd_residual': [], 'iterations': 0}
 
             avg_o, avg_d = self._average_stats(oraw, draw, current_index)
             if gidx == 0:
@@ -321,6 +311,8 @@ class AdjustedStat(object):
             else:
                 adj_o = adj_o.copy()
                 adj_d = adj_d.copy()
+
+            iteration_results = {'o_residual': [], 'd_residual': [], 'iterations': 0}
 
             if cache_intermediate:
                 iteration_results['o_history'] = [adj_o.copy()]
@@ -330,6 +322,7 @@ class AdjustedStat(object):
                 old_adj_o = adj_o.copy()
                 old_adj_d = adj_d.copy()
                 for j in xrange(num_teams):
+                    # the number of games to include for the team
                     k = current_index[j]
 
                     w, w_pre = AdjustedStat._weights(k, self.n_pre, method='exponential')
@@ -357,11 +350,11 @@ class AdjustedStat(object):
             results.append(iteration_results)
             prev_gidx = gidx
 
-        hoff, hdef, aoff, adef = AdjustedStat._ratings_for_games(unstacked, time, adj_o_history, adj_d_history)
-        unstacked['home_adj_o'] = hoff
-        unstacked['home_adj_d'] = hdef
-        unstacked['away_adj_o'] = aoff
-        unstacked['away_adj_d'] = adef
+        unstacked = AdjustedStat._rate_for_games(unstacked, time, adj_o_history, adj_d_history, self.stat)
+        # unstacked['home_adj_o'] = hoff
+        # unstacked['home_adj_d'] = hdef
+        # unstacked['away_adj_o'] = aoff
+        # unstacked['away_adj_d'] = adef
 
         return adj_o_history, adj_d_history, results, unstacked
 
@@ -406,12 +399,6 @@ class AdjustedStat(object):
         evidence = raw_stat / adj_opp_stat * loc * weights
         prior = weight_pre * stat_pre
         return avg_stat * np.sum(evidence) + prior
-
-    def store_results(self):
-        # store offense
-        # store defense
-        # store teams
-        pass
 
 if __name__ == "__main__":
     unstacked, stacked, teams = util.get_data(2012)
