@@ -216,21 +216,11 @@ def _assert_has_cols(df, columns, df_name="df"):
     for col in columns:
         assert col in df.columns, "%s dataframe is missing %s column" % (df_name, col)
 
-def validate_games(stacked, unstacked, stats_cols=['pts']):
-    def _validate_unstacked(df):
-        require_cols = ['dt', 'hteam_id', 'ateam_id', 'i_hteam', 'i_ateam', 'neutral']
-        for col in stats_cols:
-            require_cols += ['h' + col, 'a' + col]
-        _assert_has_cols(df, require_cols, "unstacked")
-
-    def _validate_stacked(df):
-        require_cols = ['dt', 'i_team'] + stats_cols
-        _assert_has_cols(df, require_cols, "stacked")
-
-    _validate_stacked(stacked)
-    _validate_unstacked(unstacked)
-    assert stacked.shape[0] == 2 * unstacked.shape[0], \
-        "stacked dataframe must have twice the number of rows as the unstacked"
+def validate_games(unstacked, stats_cols=['pts']):
+    require_cols = ['dt', 'hteam_id', 'ateam_id', 'i_hteam', 'i_ateam', 'neutral']
+    for col in stats_cols:
+        require_cols += ['h' + col, 'a' + col]
+    _assert_has_cols(unstacked, require_cols, "unstacked")
 
 def validate_teams(teams):
     require_cols = ['i_team', 'team_id']

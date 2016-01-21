@@ -5,13 +5,16 @@ from collections import defaultdict
 import util
 from general.DB import DB
 from models.RatingsModel import RatingsModel
+import org_ncaa
 
 class AdjustedStat(RatingsModel):
     home_factor = 1.014
     available_stats = {'ppp'}
     _default_guesses = {'ppp': 1.0, 'score': 60}
+    _default_params = {'n_pre': 5, 'stat': None, 'num_iterations': 10, 'game_skip': 30,
+                       'cache_intermediate': False, 'verbose': False}
 
-    def __init__(self, stat, num_iterations=10, n_pre=5):
+    def __init__(self, stat, **kwargs):
         """
         Adjusted Stat class.
 
@@ -27,9 +30,22 @@ class AdjustedStat(RatingsModel):
         n_pre : int (default=5)
             The number of games before the preseason effect dies out.
         """
-        self.n_pre = n_pre
-        self.stat = stat
-        self.num_iterations = num_iterations
+        self.params = {}
+        self.set_params(**AdjustedStat._default_params)
+        self.set_params(stat=stat)
+        self.set_params(**kwargs)
+
+    def set_params(self, **kwargs):
+        for k, v in kwargs.iteritems():
+            if k in AdjustedStat._default_params:
+                setattr(self, k, v)
+                self.params[k] = v
+            else:
+                print 'AdjustedStat class does not accept %s as a ' \
+                      'parameter and will be ignored' % k
+
+    def get_param(self, param):
+        return getattr(self, param)
 
     def _preseason_rank(self, teams):
         """Compute the preseason rank for each team's offensive and defensive stat."""
@@ -39,12 +55,14 @@ class AdjustedStat(RatingsModel):
         preseason_d = np.ones(teams.shape[0]) * avg_o
         return preseason_o, preseason_d
 
-    def _initial_guess(self, stacked, teams, gidx):
+    def _initial_guess(self, unstacked, teams, gidx):
         """The initial guess before iteration begins."""
         if gidx == 0:
             avg_o = AdjustedStat._default_guesses[self.stat]
         else:
-            avg_o = np.mean(stacked[self.stat].values[:gidx])
+            sum_h = np.sum(unstacked['h' + self.stat].values[:gidx])
+            sum_a = np.sum(unstacked['a' + self.stat].values[:gidx])
+            avg_o = (sum_h + sum_a) / (2 * gidx)
         guess_o = np.ones(teams.shape[0]) * avg_o
         guess_d = np.ones(teams.shape[0]) * avg_o
         return guess_o, guess_d
@@ -66,7 +84,7 @@ class AdjustedStat(RatingsModel):
         Initialize data vectors before iteration begins.
 
         Behavior:
-            -Uses uniform weights for the games.
+            -TODO
             -Uses a preseason weight that dies out linearly with the number
              of games.
 
@@ -96,7 +114,7 @@ class AdjustedStat(RatingsModel):
         elif method == 'exponential':
             w = np.exp(np.arange(1, n + 1) / 10.)
         else:
-            raise ValueError, "unsupported weighting method: %s" % method
+            raise ValueError("unsupported weighting method: %s" % method)
         w_pre = max(0, 1. - n / (n_pre + 1.))
         w_norm = 1 - w_pre
         w /= (w.sum() / w_norm)
@@ -180,6 +198,21 @@ class AdjustedStat(RatingsModel):
         return AdjustedStat._check_convergence(residual_o, tol) and \
             AdjustedStat._check_convergence(residual_d, tol)
 
+    def _rate_multiple(self, unstacked):
+        unstacked['season'] = unstacked['dt'].map(org_ncaa.get_season)
+        seasons = RatingsModel._get_seasons(unstacked)
+        dfs = []
+        models = []
+        for season in seasons:
+            print 'Rating for season: %s' % season
+            u = unstacked[unstacked['season'] == season]
+            adj = AdjustedStat(self.stat)
+            u = adj.rate(u)
+            dfs.append(u)
+            models.append(adj)
+
+        return models, pd.concat(dfs)
+
     @staticmethod
     def _rate_for_games(unstacked, time_vector, omatrix, dmatrix, stat_name=""):
         """
@@ -224,8 +257,7 @@ class AdjustedStat(RatingsModel):
             unstacked[name] = col
         return unstacked
 
-    def rate(self, stacked, unstacked, teams, game_skip=30, cache_intermediate=False,
-             verbose=False):
+    def rate(self, unstacked):
         """
         Run an adjusted stat model rating for the games data provided.
 
@@ -276,10 +308,12 @@ class AdjustedStat(RatingsModel):
         results : list[dictionary]
             List of iteration results for each run of the algorithm.
         """
-        util.validate_games(stacked, unstacked, ['pts', 'poss', 'ppp'])
-        util.validate_teams(teams)
+        util.validate_games(unstacked, ['pts', 'poss', 'ppp'])
+        if AdjustedStat._is_multiple_seasons(unstacked):
+            return self._rate_multiple(unstacked)
 
         unstacked = unstacked.sort('dt')
+        teams = AdjustedStat._get_teams(unstacked)
 
         idx, loc, oraw, draw = self._initialize(unstacked, teams)
         o_pre, d_pre = self._preseason_rank(teams)
@@ -299,22 +333,22 @@ class AdjustedStat(RatingsModel):
             # increment team vector indices to include new game
             current_index[hidx] += 1
             current_index[aidx] += 1
-            if gidx % game_skip != 0 and gidx != game_indices.shape[0] - 1:
+            if gidx % self.game_skip != 0 and gidx != game_indices.shape[0] - 1:
                 continue
 
-            if verbose:
+            if self.verbose:
                 print 'No. of games included: %s' % gidx
 
             avg_o, avg_d = self._average_stats(oraw, draw, current_index)
             if gidx == 0:
-                adj_o, adj_d = self._initial_guess(stacked, teams, gidx)
+                adj_o, adj_d = self._initial_guess(unstacked, teams, gidx)
             else:
                 adj_o = adj_o.copy()
                 adj_d = adj_d.copy()
 
             iteration_results = {'o_residual': [], 'd_residual': [], 'iterations': 0}
 
-            if cache_intermediate:
+            if self.cache_intermediate:
                 iteration_results['o_history'] = [adj_o.copy()]
                 iteration_results['d_history'] = [adj_d.copy()]
 
@@ -324,13 +358,15 @@ class AdjustedStat(RatingsModel):
                 for j in xrange(num_teams):
                     # the number of games to include for the team
                     k = current_index[j]
+                    if k == 0:
+                        continue
 
                     w, w_pre = AdjustedStat._weights(k, self.n_pre, method='exponential')
                     adj_o[j] = AdjustedStat._adjust(oraw[j][:k], adj_d[idx[j][:k]],
                                                     avg_o, w, loc[j][:k], w_pre, o_pre[j])
                     adj_d[j] = AdjustedStat._adjust(draw[j][:k], adj_o[idx[j][:k]],
                                                     avg_d, w, 1. / loc[j][:k], w_pre, d_pre[j])
-                if cache_intermediate:
+                if self.cache_intermediate:
                     iteration_results['o_history'].append(adj_o.copy())
                     iteration_results['d_history'].append(adj_d.copy())
                 oresidual = AdjustedStat._calc_residual(old_adj_o, adj_o)
@@ -348,15 +384,13 @@ class AdjustedStat(RatingsModel):
             adj_d_history.append(adj_d.copy())
 
             results.append(iteration_results)
-            prev_gidx = gidx
 
         unstacked = AdjustedStat._rate_for_games(unstacked, time, adj_o_history, adj_d_history, self.stat)
-        # unstacked['home_adj_o'] = hoff
-        # unstacked['home_adj_d'] = hdef
-        # unstacked['away_adj_o'] = aoff
-        # unstacked['away_adj_d'] = adef
 
-        return adj_o_history, adj_d_history, results, unstacked
+        self.offensive_ratings = np.array(adj_o_history)
+        self.defensive_ratings = np.array(adj_d_history)
+        self.results = results
+        return unstacked
 
     @staticmethod
     def _adjust(raw_stat, adj_opp_stat, avg_stat, weights, loc, weight_pre, stat_pre):
@@ -400,12 +434,13 @@ class AdjustedStat(RatingsModel):
         prior = weight_pre * stat_pre
         return avg_stat * np.sum(evidence) + prior
 
+    def __repr__(self):
+        param_string = ['%s=%s' % (k, v) for k, v in self.params.iteritems()]
+        return 'AdjustedStat(%s)' % ', '.join(param_string)
+
 if __name__ == "__main__":
-    unstacked, stacked, teams = util.get_data(2012)
-    all_teams = pd.read_sql("SELECT ncaa, ncaaid FROM teams", DB.conn)
-    teams = teams.merge(all_teams, how='left', left_on='team_id', right_on='ncaaid')
-    adj = AdjustedStat('ppp', n_pre=1)
-    o, d, r = adj.rate(stacked, unstacked, teams, cache_intermediate=True)
-    teams['o'] = o[-1]
-    teams['d'] = d[-1]
-    teams['diff'] = teams.o - teams.d
+    unstacked1, stacked1, teams1 = util.get_data(2013)
+    unstacked2, stacked2, teams2 = util.get_data(2016)
+    unstacked = pd.concat([unstacked1, unstacked2])
+    adj = AdjustedStat('ppp', n_pre=5, num_iterations=2, game_skip=30)
+    models, u = adj.rate(unstacked)
