@@ -1,6 +1,7 @@
 import numpy as np
 import pandas as pd
 from collections import defaultdict
+import datetime
 
 import util
 from general.DB import DB
@@ -315,6 +316,13 @@ class AdjustedStat(RatingsModel):
         unstacked = unstacked.sort('dt')
         teams = AdjustedStat._get_teams(unstacked)
 
+        def _empty_iteration_summary(**kwargs):
+            summary =  {'o_residual': [], 'd_residual': [], 'game_index': 0,
+                        'date': None, 'iterations': 0}
+            for k, v in kwargs.iteritems():
+                summary[k] = v
+            return summary
+
         idx, loc, oraw, draw = self._initialize(unstacked, teams)
         o_pre, d_pre = self._preseason_rank(teams)
 
@@ -327,8 +335,10 @@ class AdjustedStat(RatingsModel):
 
         game_indices = unstacked[['i_hteam', 'i_ateam']].values
         current_index = {team: 0 for team in xrange(num_teams)}
+        dates = unstacked['dt'].values
         time = [0]
-        results = []
+        zero_summary = _empty_iteration_summary(date=dates[0])
+        results = [zero_summary]
         for gidx, (hidx, aidx) in enumerate(game_indices):
             # increment team vector indices to include new game
             current_index[hidx] += 1
@@ -346,7 +356,7 @@ class AdjustedStat(RatingsModel):
                 adj_o = adj_o.copy()
                 adj_d = adj_d.copy()
 
-            iteration_results = {'o_residual': [], 'd_residual': [], 'iterations': 0}
+            iteration_results = _empty_iteration_summary()
 
             if self.cache_intermediate:
                 iteration_results['o_history'] = [adj_o.copy()]
@@ -379,14 +389,14 @@ class AdjustedStat(RatingsModel):
 
             iteration_results['iterations'] = i + 1
             time.append(gidx + 1)
-            iteration_results['time'] = gidx + 1
+            iteration_results['game_index'] = gidx + 1
+            iteration_results['date'] = dates[gidx]
             adj_o_history.append(adj_o.copy())
             adj_d_history.append(adj_d.copy())
 
             results.append(iteration_results)
 
         unstacked = AdjustedStat._rate_for_games(unstacked, time, adj_o_history, adj_d_history, self.stat)
-
         self.offensive_ratings = np.array(adj_o_history)
         self.defensive_ratings = np.array(adj_d_history)
         self.results = results
@@ -433,6 +443,23 @@ class AdjustedStat(RatingsModel):
         evidence = raw_stat / adj_opp_stat * loc * weights
         prior = weight_pre * stat_pre
         return avg_stat * np.sum(evidence) + prior
+
+    def _assert_trained(self):
+        assert getattr(self, 'results') is not None, \
+            "the model has not been trained!"
+
+    def ratings_df(self):
+        """Get dataframes of the offensive and defensive ratings over time."""
+        self._assert_trained()
+        indices = np.array([res['game_index'] for res in self.results])
+        dates = np.array([res['date'] for res in self.results])
+        df_off = pd.DataFrame(self.offensive_ratings)
+        df_def = pd.DataFrame(self.defensive_ratings)
+        df_off['game_index'] = indices
+        df_off['date'] = dates
+        df_def['game_index'] = indices
+        df_def['date'] = dates
+        return df_off.set_index('date'), df_def.set_index('date')
 
     def __repr__(self):
         param_string = ['%s=%s' % (k, v) for k, v in self.params.iteritems()]
