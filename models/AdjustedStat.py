@@ -4,49 +4,38 @@ from collections import defaultdict
 import datetime
 
 import util
-from general.DB import DB
 from models.RatingsModel import RatingsModel
 import org_ncaa
 
 class AdjustedStat(RatingsModel):
+    """
+    Adjusted Stat class.
+
+    An adjusted stat uses an iterative rating method to adjust an offensive
+    and defensive version of a statistic for strength of schedule.
+
+    Attributes
+    -------
+    stat : string
+        The statistic to adjust.
+    num_iterations : int (default=10)
+        Maximum number of iterations for rating algorithm to converge.
+    n_pre : int (default=5)
+        The number of games before the preseason effect dies out.
+    """
     home_factor = 1.014
     available_stats = {'ppp'}
     _default_guesses = {'ppp': 1.0, 'score': 60}
-    _default_params = {'n_pre': 5, 'stat': None, 'num_iterations': 10, 'game_skip': 30,
-                       'cache_intermediate': False, 'verbose': False}
 
     def __init__(self, stat, **kwargs):
-        """
-        Adjusted Stat class.
-
-        An adjusted stat uses an iterative rating method to adjust an offensive
-        and defensive version of a statistic for strength of schedule.
-
-        Attributes
-        -------
-        stat : string
-            The statistic to adjust.
-        num_iterations : int (default=10)
-            Maximum number of iterations for rating algorithm to converge.
-        n_pre : int (default=5)
-            The number of games before the preseason effect dies out.
-        """
         self.params = {}
-        self.set_params(**AdjustedStat._default_params)
+        self.set_params(**self._default_params())
         self.set_params(stat=stat)
         self.set_params(**kwargs)
 
-    def set_params(self, **kwargs):
-        for k, v in kwargs.iteritems():
-            if k in AdjustedStat._default_params:
-                setattr(self, k, v)
-                self.params[k] = v
-            else:
-                print 'AdjustedStat class does not accept %s as a ' \
-                      'parameter and will be ignored' % k
-
-    def get_param(self, param):
-        return getattr(self, param)
+    def _default_params(self):
+        return {'n_pre': 5, 'stat': None, 'num_iterations': 10, 'game_skip': 30,
+                'cache_intermediate': False, 'verbose': False}
 
     def _preseason_rank(self, teams):
         """Compute the preseason rank for each team's offensive and defensive stat."""
@@ -200,6 +189,23 @@ class AdjustedStat(RatingsModel):
             AdjustedStat._check_convergence(residual_d, tol)
 
     def _rate_multiple(self, unstacked):
+        """
+        Get adjusted stat ratings across multiple seasons. This method should
+        be called when the `rate` method detects that it was given data from
+        multiple seasons.
+
+        Parameters
+        ----------
+        unstacked : dataframe
+            Unstacked dataframe containing game and stat information.
+
+        Returns
+        -------
+        models : list
+            A list of `AdjustedStat` models.
+        unstacked : dataframe
+            A single unstacked dataframe containing ratings for all seasons.
+        """
         unstacked['season'] = unstacked['dt'].map(org_ncaa.get_season)
         seasons = RatingsModel._get_seasons(unstacked)
         dfs = []
@@ -284,30 +290,13 @@ class AdjustedStat(RatingsModel):
 
         Parameters
         ----------
-        stacked : dataframe
-            Stacked dataframe containing game and stat information.
         unstacked : dataframe
-            Unstacked dataframe containing game and stat information. Contains exactly
-            half the number of rows as `stacked`.
-        teams : dataframe
-            Dataframe mapping teams to indices in the data arrays.
-        game_skip : int
-            The game interval for new ratings. Ratings are computed every `game_skip`
-            games. (default=30)
-        cache_intermediate : boolean
-            Indicating whether to cache the intermediate stat vectors. Mostly
-            for debugging. (default=False)
-        verbose : boolean
-            Log iteration information. (default=False).
+            Unstacked dataframe containing game and stat information.
 
         Returns
         -------
-        adj_o_history : list[1d numpy array]
-            List of adjusted offensive vectors for each run.
-        adj_d_history : list[1d numpy array]
-            List of adjusted defensive vectors for each run.
-        results : list[dictionary]
-            List of iteration results for each run of the algorithm.
+        unstacked : dataframe
+            Original unstacked dataframe with ratings columns appended.
         """
         util.validate_games(unstacked, ['pts', 'poss', 'ppp'])
         if AdjustedStat._is_multiple_seasons(unstacked):

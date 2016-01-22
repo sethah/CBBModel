@@ -10,6 +10,22 @@ class RatingsModel(object):
         pass
 
     @abstractmethod
+    def _default_params(self):
+        raise NotImplementedError
+
+    def set_params(self, **kwargs):
+        for k, v in kwargs.iteritems():
+            if k in self._default_params():
+                setattr(self, k, v)
+                self.params[k] = v
+            else:
+                print 'AdjustedStat class does not accept %s as a ' \
+                      'parameter and will be ignored' % k
+
+    def get_param(self, param):
+        return getattr(self, param)
+
+    @abstractmethod
     def rate(self, unstacked):
         raise NotImplementedError
 

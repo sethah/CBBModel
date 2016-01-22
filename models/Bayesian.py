@@ -3,6 +3,8 @@ import numpy as np
 from DB import DB
 import pymc
 
+from RatingsModel import RatingsModel
+
 import util
 
 class BayesianSkill(object):
@@ -10,26 +12,13 @@ class BayesianSkill(object):
     def __init__(self):
         pass
 
-    def _get_data(self, time_range):
-        """
-        Get and store game and team data for the given time range.
-        :param time_range: A year, date, or string representing the time range of interest.
-        :return: None
-        """
-        self.unstacked, self.stacked, self.teams = util.get_data(time_range)
-
     def _initial_guess(self, attribute):
         if attribute == 'pace':
             return self.stacked.groupby('iteam').mean()['poss'].values
 
     def rate(self, time_range, N_samples=10000, burn_rate=0.3):
         """
-        Run a markov chain monte carlo simulation using the specified Bayesian network for this
-        object's game data.
-        :param time_range: A year, date, or string representing the time range of interest.
-        :param N_samples: The number of samples to run for the simulation.
-        :param burn_rate: A number between 0 and 1 indicating the ratio of samples to discard.
-        :return: (PyMC model, PyMC mcmc object)
+        TODO
         """
         assert (burn_rate >= 0) and (burn_rate <= 1), "burn rate must be between 0 and 1, but was %s" % burn_rate
         self._get_data(time_range)
@@ -81,39 +70,49 @@ class BayesianSkill(object):
 
         return model, mcmc
 
-class Pace(object):
+class Pace(RatingsModel):
+    _default_params = {'n_pre': 5, 'stat': None, 'num_iterations': 10, 'game_skip': 30,
+                       'cache_intermediate': False, 'verbose': False}
 
-    def __init__(self):
-        pass
+    def __init__(self, **kwargs):
+        self.set_params(**self._default_params())
+        self.set_params(**kwargs)
 
-    # TODO: consider putting this in a parent class
-    def _get_data(self, time_range):
-        """
-        Get and store game and team data for the given time range.
-        :param time_range: A year, date, or string representing the time range of interest.
-        :return: None
-        """
-        self.unstacked, self.stacked, self.teams = util.get_data(time_range)
+    def _default_params(self):
+        return {'n_samples': 10000, 'burn_rate': 0.3}
 
     def _initial_guess(self):
         return self.stacked.groupby('iteam').mean()['poss'].values
 
-    def rate(self, time_range, N_samples=10000, burn_rate=0.3):
+    def rate(self, unstacked):
         """
-        Run a markov chain monte carlo simulation using the specified Bayesian network for this
-        object's game data.
-        :param time_range: A year, date, or string representing the time range of interest.
-        :param N_samples: The number of samples to run for the simulation.
-        :param burn_rate: A number between 0 and 1 indicating the ratio of samples to discard.
-        :return: (PyMC model, PyMC mcmc object)
-        """
-        assert (burn_rate >= 0) and (burn_rate <= 1), "burn rate must be between 0 and 1, but was %s" % burn_rate
-        self._get_data(time_range)
+        Run a Markov Chain Monte Carlo (MCMC) simulation on the defined
+        directed graphical model (aka Bayesian Network).
 
-        num_teams = self.teams.shape[0]
-        home_team_idx = self.unstacked.i_hteam.values
-        away_team_idx = self.unstacked.i_ateam.values
-        observed_pace = self.unstacked.poss.values
+        References
+        ----------
+        TODO
+
+        Parameters
+        ----------
+        unstacked : dataframe
+            Unstacked dataframe containing game and stat information.
+
+        Returns
+        -------
+        TODO
+        """
+        util.validate_games(unstacked, ['poss'])
+        assert (self.burn_rate >= 0) and (self.burn_rate <= 1), \
+            "burn rate must be between 0 and 1, but was %s" % self.burn_rate
+
+        unstacked = unstacked.sort('dt')
+        teams = Pace._get_teams(unstacked)
+
+        num_teams = teams.shape[0]
+        home_team_idx = unstacked.i_hteam.values
+        away_team_idx = unstacked.i_ateam.values
+        observed_pace = unstacked.poss.values
         pace_initial = self._initial_guess()
         # tau = 1. / pymc.Uniform('sigma', 3, 20)**2
         tau = pymc.Uniform('tau', 1. / 40**2, 1. / 20**2)
@@ -138,7 +137,7 @@ class Pace(object):
         # map_ = pymc.MAP(model)
         # map_.fit(method='fmin_powell')
         mcmc = pymc.MCMC(model)
-        mcmc.sample(N_samples, N_samples * burn_rate)
+        mcmc.sample(self.n_samples, self.n_samples * self.burn_rate)
 
         return model, mcmc
 
