@@ -40,7 +40,10 @@ class RatingsModel(object):
         teams = merged.reset_index().rename(columns={'index': 'team_id'})
         teams = teams.sort('team_id')
         teams['i_team'] = np.arange(teams.shape[0])
-        return teams[['team_id', 'i_team']]
+        team_index = {}
+        for team, idx in teams[['team_id', 'i_team']].values:
+            team_index[int(team)] = int(idx)
+        return teams[['team_id', 'i_team']], team_index
 
     @staticmethod
     def _get_seasons(unstacked):

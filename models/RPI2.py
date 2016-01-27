@@ -32,7 +32,16 @@ def test_rpi():
     agg = RPIAggregator()
     agg.rate_for_games(df)
 
-class RPIAggregator(object):
+class RPI(object):
+    """
+    RPI ratings class.
+
+    TODO
+
+    Attributes
+    -------
+    TODO
+    """
 
     def __init__(self, ignore_nan_teams=True, team_col='team_id'):
         self.ignore_nan_teams = ignore_nan_teams
@@ -221,7 +230,7 @@ class RPIAggregator(object):
         :param idx:
         :return:
         """
-        return RPIAggregator._calculate_rpi(self.wp[idx], self.owp[idx], self.oowp[idx])
+        return RPI._calculate_rpi(self.wp[idx], self.owp[idx], self.oowp[idx])
 
     def calculate(self):
         """
@@ -232,7 +241,7 @@ class RPIAggregator(object):
         self.owp = self._calculate_owp()
         self.oowp = self._calculate_oowp(self.owp)
 
-        return RPIAggregator._calculate_rpi(self.wp, self.owp, self.oowp)
+        return RPI._calculate_rpi(self.wp, self.owp, self.oowp)
 
     def rate_at_date(self, dt):
         """

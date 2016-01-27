@@ -1,11 +1,11 @@
 import numpy as np
 import pandas as pd
 from collections import defaultdict
-import datetime
+import scipy.stats as scs
 
 import util
-from models.RatingsModel import RatingsModel
 import org_ncaa
+from RatingsModel import RatingsModel
 
 class AdjustedStat(RatingsModel):
     """
@@ -24,6 +24,7 @@ class AdjustedStat(RatingsModel):
         The number of games before the preseason effect dies out.
     """
     home_factor = 1.014
+    pythag_exponent = 11.5
     available_stats = {'ppp'}
     _default_guesses = {'ppp': 1.0, 'score': 60}
 
@@ -109,6 +110,41 @@ class AdjustedStat(RatingsModel):
         w_norm = 1 - w_pre
         w /= (w.sum() / w_norm)
         return w, w_pre
+
+    @staticmethod
+    def pythag(off_rtg, def_rtg):
+        exp = AdjustedStat.pythag_exponent
+        return off_rtg**(exp) / (off_rtg**(exp) + def_rtg**(exp))
+
+    @staticmethod
+    def log5(pa, pb):
+        return (pa - pa * pb) / (pa + pb - 2 * pa * pb)
+
+    @staticmethod
+    def home_prob(home_o, home_d, away_o, away_d, neutral):
+        home_adjustments = np.array(map(lambda x: 1.0 if x else AdjustedStat.home_factor, neutral))
+        away_adjustments = 1.0 / home_adjustments
+        home_o *= home_adjustments
+        home_d /= home_adjustments
+        away_o *= away_adjustments
+        away_d /= away_adjustments
+        phome = AdjustedStat.pythag(home_o, home_d)
+        paway = AdjustedStat.pythag(away_o, away_d)
+        return AdjustedStat.log5(phome, paway)
+
+    @staticmethod
+    def _upset_weights(upset_factors):
+        alpha, beta, loc, scale = .6178732886, 7317446.69798, -0.17565759957, 163983.937878
+        return 1 - scs.beta.cdf(upset_factors, alpha, beta, loc, scale)
+
+    @staticmethod
+    def _weight_by_prediction(home_o, home_d, away_o, away_d, neutral, home_scores, away_scores):
+        """Weights that emphasize close games more than blowouts."""
+        home_probabilities = AdjustedStat.home_prob(home_o, home_d, away_o, away_d, neutral)
+        diff_ratio = (home_scores - away_scores) / (home_scores + away_scores)
+        upset_factors = home_probabilities * diff_ratio
+        weights = AdjustedStat._upset_weights(upset_factors)
+        return weights / np.sum(weights)
 
     @staticmethod
     def _loc_factor(is_home, is_neutral):
@@ -303,10 +339,12 @@ class AdjustedStat(RatingsModel):
             return self._rate_multiple(unstacked)
 
         unstacked = unstacked.sort('dt')
-        teams = AdjustedStat._get_teams(unstacked)
+        teams, team_index = AdjustedStat._get_teams(unstacked)
+        unstacked['i_hteam'] = unstacked['hteam_id'].map(lambda tid: team_index[tid])
+        unstacked['i_ateam'] = unstacked['ateam_id'].map(lambda tid: team_index[tid])
 
         def _empty_iteration_summary(**kwargs):
-            summary =  {'o_residual': [], 'd_residual': [], 'game_index': 0,
+            summary = {'o_residual': [], 'd_residual': [], 'game_index': 0,
                         'date': None, 'iterations': 0}
             for k, v in kwargs.iteritems():
                 summary[k] = v
@@ -327,6 +365,14 @@ class AdjustedStat(RatingsModel):
         dates = unstacked['dt'].values
         time = [0]
         zero_summary = _empty_iteration_summary(date=dates[0])
+        # TODO: keep a running track of the offensive and defensive ratings
+        # TODO: for each game. Then, before each adjustment iteration, you
+        # TODO: get weights for each game taking into account MOV.
+        home_o = zero_guess_o[game_indices[:, 0]]
+        home_d = zero_guess_d[game_indices[:, 0]]
+        away_o = zero_guess_o[game_indices[:, 1]]
+        away_d = zero_guess_d[game_indices[:, 1]]
+        prev_idx = 0
         results = [zero_summary]
         for gidx, (hidx, aidx) in enumerate(game_indices):
             # increment team vector indices to include new game
@@ -361,6 +407,18 @@ class AdjustedStat(RatingsModel):
                         continue
 
                     w, w_pre = AdjustedStat._weights(k, self.n_pre, method='exponential')
+                    weights = AdjustedStat._weight_by_prediction(home_o[idx[j][:k]], home_d[idx[j][:k]],
+                                                                 away_o[idx[j][:k]], away_d[idx[j][:k]],
+                                                                 unstacked.neutral.values[idx[j][:k]],
+                                                                 unstacked.hpts.values[idx[j][:k]],
+                                                                 unstacked.apts.values[idx[j][:k]])
+                    sum_to = 1 - w_pre
+                    weights = weights * w
+                    weights /= np.sum(weights)
+                    weights *= sum_to
+                    # print weights
+                    assert np.abs(np.sum(weights) + w_pre - 1.0) < 0.001
+                    w = weights
                     adj_o[j] = AdjustedStat._adjust(oraw[j][:k], adj_d[idx[j][:k]],
                                                     avg_o, w, loc[j][:k], w_pre, o_pre[j])
                     adj_d[j] = AdjustedStat._adjust(draw[j][:k], adj_o[idx[j][:k]],
@@ -383,12 +441,20 @@ class AdjustedStat(RatingsModel):
             adj_o_history.append(adj_o.copy())
             adj_d_history.append(adj_d.copy())
 
+            home_indices = unstacked['i_hteam'].values[prev_idx:gidx]
+            away_indices = unstacked['i_hteam'].values[prev_idx:gidx]
+            home_o[prev_idx:gidx] = adj_o[home_indices]
+            home_d[prev_idx:gidx] = adj_d[home_indices]
+            away_o[prev_idx:gidx] = adj_o[away_indices]
+            away_d[prev_idx:gidx] = adj_d[away_indices]
+
             results.append(iteration_results)
 
         unstacked = AdjustedStat._rate_for_games(unstacked, time, adj_o_history, adj_d_history, self.stat)
         self.offensive_ratings = np.array(adj_o_history)
         self.defensive_ratings = np.array(adj_d_history)
         self.results = results
+        self.team_index = team_index
         return unstacked
 
     @staticmethod

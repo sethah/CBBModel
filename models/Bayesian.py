@@ -71,8 +71,6 @@ class BayesianSkill(object):
         return model, mcmc
 
 class Pace(RatingsModel):
-    _default_params = {'n_pre': 5, 'stat': None, 'num_iterations': 10, 'game_skip': 30,
-                       'cache_intermediate': False, 'verbose': False}
 
     def __init__(self, **kwargs):
         self.set_params(**self._default_params())
