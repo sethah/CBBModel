@@ -13,21 +13,27 @@ class RatingsModel(object):
     def _default_params(self):
         raise NotImplementedError
 
-    def set_params(self, **kwargs):
-        for k, v in kwargs.iteritems():
-            if k in self._default_params():
-                setattr(self, k, v)
-                self.params[k] = v
-            else:
-                print 'AdjustedStat class does not accept %s as a ' \
-                      'parameter and will be ignored' % k
-
-    def get_param(self, param):
-        return getattr(self, param)
-
     @abstractmethod
     def rate(self, unstacked):
         raise NotImplementedError
+
+    @abstractmethod
+    def _rate_multiple(self, unstacked):
+        raise NotImplementedError
+
+    def set_params(self, **kwargs):
+        """Set parameters in the dictionary."""
+        for param_name, value in kwargs.iteritems():
+            # only set parameters that are in the default
+            if param_name in self._default_params():
+                setattr(self, param_name, value)
+                self.params[param_name] = value
+            else:
+                print 'AdjustedStat class does not accept %s as a ' \
+                      'parameter and will be ignored' % param_name
+
+    def get_param(self, param_name):
+        return getattr(self, param_name)
 
     @staticmethod
     def _get_teams(unstacked, min_games=0):
@@ -53,11 +59,3 @@ class RatingsModel(object):
     def _is_multiple_seasons(unstacked):
         seasons = RatingsModel._get_seasons(unstacked)
         return seasons.shape[0] > 1
-
-    @abstractmethod
-    def _rate_multiple(self, unstacked):
-        raise NotImplementedError
-
-
-
-

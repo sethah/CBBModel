@@ -112,16 +112,41 @@ class AdjustedStat(RatingsModel):
         return w, w_pre
 
     @staticmethod
-    def pythag(off_rtg, def_rtg):
-        exp = AdjustedStat.pythag_exponent
+    def pythag(off_rtg, def_rtg, exponent=AdjustedStat.pythag_exponent):
+        """
+        Pythagorean expectation.
+
+        Formula:
+            \frac{off_{rtg}^{exponent}}{\left(off_{rtg}^{exponent} +
+                def_{rtg}^{exponent}\right)}
+
+        References
+        ----------
+        TODO
+
+        Parameters
+        ----------
+        off_rtg : float or numpy array
+            Offensive rating.
+        def_rtg : float or numpy array
+            Defensive rating.
+
+        Returns
+        -------
+        pythag : float or numpy array
+            The pythagorean expectation.
+        """
+        exp = exponent
         return off_rtg**(exp) / (off_rtg**(exp) + def_rtg**(exp))
 
     @staticmethod
     def log5(pa, pb):
+        """Log5 win probability."""
         return (pa - pa * pb) / (pa + pb - 2 * pa * pb)
 
     @staticmethod
-    def home_prob(home_o, home_d, away_o, away_d, neutral):
+    def home_win_prob(home_o, home_d, away_o, away_d, neutral):
+        """Get the home win probabilities for games, given home and away ratings."""
         home_adjustments = np.array(map(lambda x: 1.0 if x else AdjustedStat.home_factor, neutral))
         away_adjustments = 1.0 / home_adjustments
         home_o *= home_adjustments
@@ -338,8 +363,10 @@ class AdjustedStat(RatingsModel):
         if AdjustedStat._is_multiple_seasons(unstacked):
             return self._rate_multiple(unstacked)
 
+        # need games to be in sequential order
         unstacked = unstacked.sort('dt')
         teams, team_index = AdjustedStat._get_teams(unstacked)
+        # self.add_team_index(unstacked) ?
         unstacked['i_hteam'] = unstacked['hteam_id'].map(lambda tid: team_index[tid])
         unstacked['i_ateam'] = unstacked['ateam_id'].map(lambda tid: team_index[tid])
 
@@ -356,22 +383,19 @@ class AdjustedStat(RatingsModel):
         num_teams = len(idx)
 
         # Add the preseason rank as a starting point
-        zero_guess_o, zero_guess_d = self._preseason_rank(teams)
-        adj_o_history = [zero_guess_o]
-        adj_d_history = [zero_guess_d]
+        adj_o_history = [o_pre]
+        adj_d_history = [d_pre]
 
         game_indices = unstacked[['i_hteam', 'i_ateam']].values
         current_index = {team: 0 for team in xrange(num_teams)}
         dates = unstacked['dt'].values
         time = [0]
         zero_summary = _empty_iteration_summary(date=dates[0])
-        # TODO: keep a running track of the offensive and defensive ratings
-        # TODO: for each game. Then, before each adjustment iteration, you
-        # TODO: get weights for each game taking into account MOV.
-        home_o = zero_guess_o[game_indices[:, 0]]
-        home_d = zero_guess_d[game_indices[:, 0]]
-        away_o = zero_guess_o[game_indices[:, 1]]
-        away_d = zero_guess_d[game_indices[:, 1]]
+        # keep track of adjusted ratings for each game as we iterate
+        home_o = o_pre[game_indices[:, 0]]
+        home_d = d_pre[game_indices[:, 0]]
+        away_o = o_pre[game_indices[:, 1]]
+        away_d = d_pre[game_indices[:, 1]]
         prev_idx = 0
         results = [zero_summary]
         for gidx, (hidx, aidx) in enumerate(game_indices):
@@ -388,6 +412,8 @@ class AdjustedStat(RatingsModel):
             if gidx == 0:
                 adj_o, adj_d = self._initial_guess(unstacked, teams, gidx)
             else:
+                # the initial guess is simply the ratings from the previous iteration
+                # TODO: some weird convergence issues for this method
                 adj_o = adj_o.copy()
                 adj_d = adj_d.copy()
 
@@ -442,7 +468,7 @@ class AdjustedStat(RatingsModel):
             adj_d_history.append(adj_d.copy())
 
             home_indices = unstacked['i_hteam'].values[prev_idx:gidx]
-            away_indices = unstacked['i_hteam'].values[prev_idx:gidx]
+            away_indices = unstacked['i_ateam'].values[prev_idx:gidx]
             home_o[prev_idx:gidx] = adj_o[home_indices]
             home_d[prev_idx:gidx] = adj_d[home_indices]
             away_o[prev_idx:gidx] = adj_o[away_indices]
@@ -450,6 +476,7 @@ class AdjustedStat(RatingsModel):
 
             results.append(iteration_results)
 
+        # add a rating column to include ratings for each game in the dataframe
         unstacked = AdjustedStat._rate_for_games(unstacked, time, adj_o_history, adj_d_history, self.stat)
         self.offensive_ratings = np.array(adj_o_history)
         self.defensive_ratings = np.array(adj_d_history)
@@ -518,7 +545,7 @@ class AdjustedStat(RatingsModel):
 
     def __repr__(self):
         param_string = ['%s=%s' % (k, v) for k, v in self.params.iteritems()]
-        return 'AdjustedStat(%s)' % ', '.join(param_string)
+        return '%s(%s)' % (self.__class__.__name__, ', '.join(param_string))
 
 if __name__ == "__main__":
     unstacked1, stacked1, teams1 = util.get_data(2013)
