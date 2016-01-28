@@ -36,6 +36,12 @@ class RatingsModel(object):
         return getattr(self, param_name)
 
     @staticmethod
+    def _add_team_index(unstacked, team_index):
+        unstacked['i_hteam'] = unstacked['hteam_id'].map(lambda tid: team_index[tid])
+        unstacked['i_ateam'] = unstacked['ateam_id'].map(lambda tid: team_index[tid])
+        return unstacked
+
+    @staticmethod
     def _get_teams(unstacked, min_games=0):
         """Get teams and index from the unstacked games dataframe."""
         count_col = 'game_id'
