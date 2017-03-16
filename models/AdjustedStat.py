@@ -36,7 +36,7 @@ class AdjustedStat(RatingsModel):
 
     def _default_params(self):
         return {'n_pre': 5, 'stat': None, 'num_iterations': 10, 'game_skip': 30,
-                'cache_intermediate': False, 'verbose': False}
+                'cache_intermediate': False, 'verbose': False, 'weight_decay': 'linear'}
 
     def _preseason_rank(self, teams):
         """Compute the preseason rank for each team's offensive and defensive stat."""
@@ -421,7 +421,7 @@ class AdjustedStat(RatingsModel):
                     continue
 
                 w_mov = AdjustedStat._weight_by_outcome(k)
-                w_time, w_pre = AdjustedStat._weights(k, self.n_pre, method='exponential')
+                w_time, w_pre = AdjustedStat._weights(k, self.n_pre, method=self.weight_decay)
                 w = w_time * w_mov / (np.sum(w_time * w_mov) / (1 - w_pre))
                 adj_o[j] = AdjustedStat._adjust(oraw[j][:k], adj_d[idx[j][:k]],
                                                 avg_o, w, loc[j][:k], w_pre, o_pre[j])
@@ -436,7 +436,7 @@ class AdjustedStat(RatingsModel):
             iteration_results['d_residual'].append(dresidual)
 
             if AdjustedStat._is_converged(oresidual, dresidual):
-                pass
+                break
 
         iteration_results['iterations'] = i + 1
 
@@ -477,15 +477,15 @@ class AdjustedStat(RatingsModel):
             Original unstacked dataframe with ratings columns appended.
         """
         util.validate_games(unstacked, ['pts', 'poss', 'ppp'])
-        if AdjustedStat._is_multiple_seasons(unstacked):
+        if RatingsModel._is_multiple_seasons(unstacked):
             return self._rate_multiple(unstacked)
 
         # need games to be in sequential order
         unstacked = unstacked.sort('dt')
-        teams, team_index = AdjustedStat._get_teams(unstacked)
+        teams, team_index = RatingsModel._get_teams(unstacked)
         num_teams = teams.shape[0]
         num_games = unstacked.shape[0]
-        unstacked = AdjustedStat._add_team_index(unstacked, team_index)
+        unstacked = RatingsModel._add_team_index(unstacked, team_index)
 
         idx, loc, oraw, draw = self._initialize(unstacked, teams)
         o_pre, d_pre = self._preseason_rank(teams)
@@ -533,6 +533,7 @@ class AdjustedStat(RatingsModel):
                                             adj_o, adj_d, game_indices[:, 0], game_indices[:, 1], gidx, prev_idx)
             adj_o_history.append(adj_o.copy())
             adj_d_history.append(adj_d.copy())
+            iter_results['game_index'] = gidx
             results.append(iter_results)
             games_included.append(gidx + 1)
             prev_idx = gidx
@@ -598,13 +599,17 @@ class AdjustedStat(RatingsModel):
         dates = np.array([res['date'] for res in self.results])
         reverse_index = {v: k for k, v in self.team_index.iteritems()}
         columns = [reverse_index[i] for i in xrange(len(reverse_index))]
-        df_off = pd.DataFrame(self.offensive_ratings, columns=columns)
-        df_def = pd.DataFrame(self.defensive_ratings, columns=columns)
-        df_off['game_index'] = indices
-        df_off['date'] = dates
-        df_def['game_index'] = indices
-        df_def['date'] = dates
-        return df_off.set_index(['date', 'game_index']), df_def.set_index(['date', 'game_index'])
+        df_off = pd.DataFrame(self.offensive_ratings.T, columns=indices)
+        df_def = pd.DataFrame(self.defensive_ratings.T, columns=indices)
+        # df_off.columns = indices
+        # df_def.columns = indices
+        df_off['team_id'] = columns
+        df_def['team_id'] = columns
+        # df_off['date'] = dates
+        # df_def['game_index'] = indices
+        # df_def['date'] = dates
+        # return df_off.set_index('game_index'), df_def.set_index('game_index')
+        return df_off, df_def
 
     def __repr__(self):
         param_string = ['%s=%s' % (k, v) for k, v in self.params.iteritems()]

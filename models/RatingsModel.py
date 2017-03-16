@@ -1,6 +1,7 @@
 from abc import abstractmethod
 
 import numpy as np
+import pandas as pd
 
 import org_ncaa
 
@@ -17,9 +18,9 @@ class RatingsModel(object):
     def rate(self, unstacked):
         raise NotImplementedError
 
-    @abstractmethod
-    def _rate_multiple(self, unstacked):
-        raise NotImplementedError
+    # @abstractmethod
+    # def _rate_multiple(self, unstacked):
+    #     raise NotImplementedError
 
     def set_params(self, **kwargs):
         """Set parameters in the dictionary."""
@@ -29,8 +30,8 @@ class RatingsModel(object):
                 setattr(self, param_name, value)
                 self.params[param_name] = value
             else:
-                print 'AdjustedStat class does not accept %s as a ' \
-                      'parameter and will be ignored' % param_name
+                print('AdjustedStat class does not accept %s as a ' \
+                      'parameter and will be ignored' % param_name)
 
     def get_param(self, param_name):
         return getattr(self, param_name)
@@ -49,6 +50,7 @@ class RatingsModel(object):
         away_gb = unstacked.groupby('ateam_id').count()[[count_col]]
         merged = home_gb.merge(away_gb, how='outer', left_index=True, right_index=True)
         merged[count_col] = merged[count_col + '_x'] + merged[count_col + '_y']
+        merged.index.name = 'index'
         teams = merged.reset_index().rename(columns={'index': 'team_id'})
         teams = teams.sort('team_id')
         teams['i_team'] = np.arange(teams.shape[0])
@@ -65,3 +67,15 @@ class RatingsModel(object):
     def _is_multiple_seasons(unstacked):
         seasons = RatingsModel._get_seasons(unstacked)
         return seasons.shape[0] > 1
+
+    def _rate_multiple(self, unstacked):
+        unstacked['season'] = unstacked['dt'].map(org_ncaa.get_season)
+        seasons = RatingsModel._get_seasons(unstacked)
+        dfs = []
+        for season in seasons:
+            print('Rating for season: %s' % season)
+            u = unstacked[unstacked['season'] == season]
+            u = self.rate(u)
+            dfs.append(u)
+
+        return pd.concat(dfs)

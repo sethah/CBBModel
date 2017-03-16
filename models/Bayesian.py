@@ -82,7 +82,7 @@ class Pace(RatingsModel):
     def _initial_guess(self):
         return self.stacked.groupby('iteam').mean()['poss'].values
 
-    def rate(self, unstacked):
+    def _rate_one(self, unstacked):
         """
         Run a Markov Chain Monte Carlo (MCMC) simulation on the defined
         directed graphical model (aka Bayesian Network).

@@ -3,6 +3,10 @@ import numpy as np
 from general.DB import DB
 import requests
 from bs4 import BeautifulSoup
+import org_ncaa
+
+from RatingsModel import RatingsModel
+
 
 import util
 
@@ -32,7 +36,7 @@ def test_rpi():
     agg = RPIAggregator()
     agg.rate_for_games(df)
 
-class RPI(object):
+class RPI(RatingsModel):
     """
     RPI ratings class.
 
@@ -274,6 +278,33 @@ class RPI(object):
 
             self.update_wins(i, j, row[cols['home_outcome']], row[cols['neutral']])
             self.update_played(i, j, row[cols['neutral']])
+
+    def rate(self, unstacked):
+        if RatingsModel._is_multiple_seasons(unstacked):
+            return self._rate_multiple(unstacked)
+
+        # need games to be in sequential order
+        unstacked = unstacked.sort('dt')
+        teams, team_index = RatingsModel._get_teams(unstacked)
+        num_teams = teams.shape[0]
+        num_games = unstacked.shape[0]
+        unstacked = RatingsModel._add_team_index(unstacked, team_index)
+
+        self._initialize(teams)
+        home_rpi = np.zeros(num_games)
+        away_rpi = np.zeros(num_games)
+        hwp = np.zeros(num_games)
+        howp = np.zeros(num_games)
+        hoowp = np.zeros(num_games)
+        awp = np.zeros(num_games)
+        aowp = np.zeros(num_games)
+        aoowp = np.zeros(num_games)
+        home_gp = np.zeros(num_games)
+        away_gp = np.zeros(num_games)
+        game_indices = unstacked[['i_hteam', 'i_ateam']].values
+        for gidx, (hidx, aidx) in enumerate(game_indices):
+
+
 
     def rate_for_every_game(self, teams, games, store_intermediate=False):
         """

@@ -55,7 +55,7 @@ def get_date_bounds(input=None):
     else:
         bounds = [datetime.date(1900, 10, 30), datetime.date(3000, 4, 30)]
 
-    return bounds
+    return list(bounds)
 
 def get_games(input=None):
     """
@@ -109,6 +109,7 @@ def get_team_stats(time_range=None, stats=None):
     q = """SELECT
                 g.*,
                 b.team,
+                b.team_id,
                 %s
             FROM box_stats b
             JOIN games_test g
@@ -116,26 +117,34 @@ def get_team_stats(time_range=None, stats=None):
             AND b.first_name='Totals'
             AND g.dt > '%s'
             AND g.dt <= '%s'
+            AND b.team_id IS NOT NULL
+            AND g.hteam_id IS NOT NULL
+            AND g.ateam_id IS NOT NULL
+            ORDER BY g.dt
         """ % (stat_query, bounds[0], bounds[1])
-    df = pd.read_sql(q, DB.conn).dropna(subset=['ateam_id', 'hteam_id'])
+    df = pd.read_sql(q, DB.conn, parse_dates={'dt': '%Y-%m-%d'})
+    df['opp_id'] = df.apply(lambda row: row.hteam_id if row.team_id == row.ateam_id else row.ateam_id, 1)
     df['team'] = df.team.map(lambda s: s.replace(';', ''))
     df['team'] = df.team.map(lambda t: org_ncaa.REVERSE_ALIAS.get(t, t))
     return df
 
-def filter_teams(stacked):
+def filter_teams(stacked, min_games=10):
     """
     Filter out games where one or more teams aren't in the teams database.
     :param stacked: DATAFRAME - stacked dataframe of games and stats.
     :return: DATAFRAME - filtered, stacked dataframe.
     """
     all_teams = pd.read_sql("SELECT ncaa, ncaaid AS team_id FROM teams", DB.conn)
-    stacked = stacked.merge(all_teams, left_on="team", right_on="ncaa")
+    stacked = stacked.merge(all_teams, left_on="team_id", right_on="team_id")
     stacked.drop('ncaa', axis=1, inplace=True)
     gb = stacked.groupby('game_id').count()
-    doubles = gb[gb.dt == 2].index.values
-    return stacked[stacked.game_id.isin(doubles)]
+    doubles = gb[gb.hteam_id == 2].index.values
+    stacked = stacked[stacked.game_id.isin(doubles)]
+    gb = stacked.groupby('team_id').count()
+    eliminate = gb[gb['hteam_id'] < min_games].index.values
+    return stacked[stacked['team_id'].map(lambda t: t not in eliminate)]
 
-def get_data(time_range=None):
+def get_data(time_range=None, min_games=10):
     """
     Get games data for a given time interval.
     :param time_range: A year, date, or string representing the time interval of interest.
@@ -143,11 +152,16 @@ def get_data(time_range=None):
     """
     stacked = get_team_stats(time_range, ['pts', 'poss', 'ppp'])
     stacked = stacked[~pd.isnull(stacked.pts)]
-    stacked = filter_teams(stacked)
+    stacked = filter_teams(stacked, min_games)
     teams = get_teams(stacked, input_col='team_id', output_col='team_id')
 
     # join to get the team index as a column
     stacked = stacked.merge(teams[['team_id', 'i_team']], on="team_id")
+    stacked = stacked.merge(teams[['team_id', 'i_team']], left_on='opp_id', right_on='team_id', how='left')
+    stacked.rename(columns={'i_team_x': 'i_team', 'i_team_y': 'i_opp', 'team_id_x': 'team_id'}, inplace=True)
+    stacked.drop(['team_id_y'], axis=1, inplace=True)
+    stacked['season'] = stacked['dt'].map(lambda x: org_ncaa.get_season(x))
+    stacked = stacked[~pd.isnull(stacked['i_opp'])]
 
     hgames = stacked[stacked.team_id == stacked.hteam_id]
     agames = stacked[stacked.team_id != stacked.hteam_id]
@@ -161,6 +175,7 @@ def get_data(time_range=None):
                               'poss_x': 'hposs', 'poss_y': 'aposs', 'i_team_y': 'i_ateam',
                               'i_team_x': 'i_hteam', 'ppp_x': 'hppp', 'ppp_y': 'appp'}, inplace=True)
     unstacked['poss'] = unstacked.apply(lambda row: 0.5*(row.hposs + row.aposs), axis=1)
+    unstacked['season'] = unstacked['dt'].map(lambda x: org_ncaa.get_season(x))
     return unstacked, stacked, teams
 
 def compare_ratings(this, that, compare_col, this_name='this',
@@ -225,6 +240,14 @@ def validate_games(unstacked, stats_cols=['pts']):
 def validate_teams(teams):
     require_cols = ['i_team', 'team_id']
     _assert_has_cols(teams, require_cols, "unstacked")
+
+def get_home(neutral, teamid, homeid):
+    if neutral:
+        return 0
+    elif teamid == homeid:
+        return 1
+    else:
+        return -1
 
 if __name__ == "__main__":
     unstacked, stacked, teams = get_data(2015)
